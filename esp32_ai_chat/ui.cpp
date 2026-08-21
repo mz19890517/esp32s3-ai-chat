@@ -2,6 +2,12 @@
 #include "board_config.h"
 #include <Wire.h>
 
+#if __has_include(<font/u8g2_font_unifont_h_chinese4.h>)
+#define AI_FONT u8g2_font_unifont_h_chinese4
+#else
+#define AI_FONT u8g2_font_unifont_t_chinese4
+#endif
+
 const uint16_t COL_BG       = 0x1082;
 const uint16_t COL_PANEL    = 0x18E4;
 const uint16_t COL_PANEL_HI = 0x31A8;
@@ -54,7 +60,7 @@ void ui_init()
   gfx->begin();
   gfx->fillScreen(COL_BG);
   gfx->setTextSize(1);
-  gfx->setFont(u8g2_font_unifont_t_chinese4);
+  gfx->setFont(AI_FONT);
   gfx->setUTF8Print(true);
 
   pinMode(PIN_LCD_BL, OUTPUT);

@@ -1,6 +1,6 @@
 #pragma once
 #ifndef U8G2_FONT_SUPPORT
-#define U8G2_FONT_SUPPORT 1
+#define U8G2_FONT_SUPPORT
 #endif
 #include <Arduino_GFX_Library.h>
 
