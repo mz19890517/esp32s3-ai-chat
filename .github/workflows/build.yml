@@ -26,7 +26,7 @@ jobs:
         run: pio run
       - name: Merge flash image
         run: |
-          pip install esptool
+          pip install "esptool<5"
           python -m esptool --chip esp32s3 merge-bin -o merged_flash.bin \
             --flash_mode qio --flash_freq 80m --flash_size 16MB \
             0x0 .pio/build/esp32s3/bootloader.bin \
