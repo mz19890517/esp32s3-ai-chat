@@ -21,6 +21,7 @@
 1. 安装 ESP32 板支持包（Boards Manager 搜索 `esp32`）
 2. 库管理器安装：
    - **GFX Library for Arduino**（作者 Moon On Our Nation，版本 ≥ 1.6.0）
+   - **U8g2**（olikraus，中文字体依赖）
    - **ArduinoJson**（≥ 7.0）
 3. 开发板选 **ESP32S3 Dev Module**，关键设置：
    | 选项 | 值 |
