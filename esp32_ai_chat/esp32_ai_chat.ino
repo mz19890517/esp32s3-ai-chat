@@ -43,7 +43,7 @@ static int lastX = 0, lastY = 0, downX = 0, downY = 0;
 static int movedDist = 0;
 static bool chatDragging = false;
 static bool listDragging = false;
-static int dragLastY = 0;
+static int dragStartY = 0, scrollAtDragStart = 0;
 
 static uint8_t lastBusyPhase = 0xFF;
 static uint8_t lastBlink = 0;
@@ -221,27 +221,21 @@ static void drawTitleBar()
 
 static void drawSettingsBody()
 {
-  struct Card { int y; const char *label; String value; };
-  String netVal = wifiUp() ? (cfg.ssid + "  " + WiFi.localIP().toString())
-                           : (cfg.ssid.length() ? cfg.ssid + "（未连接）" : "未配置");
-  String keyVal = cfg.key.length() ? cfg.key.substring(0, min(6, (int)cfg.key.length())) + "****" : "未设置";
-  Card cards[4] = {
-    {44, "网络", fitTail(netVal, 280)},
-    {108, "接口", fitTail(cfg.url, 280)},
-    {172, "模型", fitTail(cfg.model, 280)},
-    {236, "密钥", fitTail(keyVal, 280)},
+  struct Row { int y; const char *label; };
+  Row rows[5] = {
+    {44, "WiFi 设置"},
+    {104, "AI 接口设置"},
+    {164, "清除聊天记录"},
+    {224, "重启设备"},
+    {284, "返回聊天"},
   };
-  for (auto &c : cards)
+  for (auto &r : rows)
   {
-    gfx->fillRoundRect(3, c.y, 314, 56, 8, COL_PANEL);
-    drawTextAt(14, c.y + 22, c.label, COL_SUB, COL_PANEL);
-    drawTextAt(14, c.y + 45, c.value, COL_TEXT, COL_PANEL);
+    gfx->fillRoundRect(3, r.y, 314, 48, 8, COL_PANEL);
+    drawTextAt(14, r.y + 19, r.label, COL_TEXT, COL_PANEL);
+    drawTextAt(296, r.y + 19, ">", COL_SUB, COL_PANEL);
   }
-  drawBtn(3, 304, 155, 44, "WiFi 设置", COL_KEY_FN, COL_TEXT);
-  drawBtn(162, 304, 155, 44, "API 设置", COL_KEY_FN, COL_TEXT);
-  drawBtn(3, 356, 155, 44, "清除聊天记录", COL_KEY_FN, COL_TEXT);
-  drawBtn(162, 356, 155, 44, "重启设备", COL_KEY_FN, COL_TEXT);
-  drawBtn(3, 420, 314, 44, "返回聊天", COL_ACCENT_DK, COL_TEXT);
+  drawTextAt(14, 344, "触摸 AI 助手 v1.1", COL_SUB, COL_BG);
 }
 
 static void drawRssi(int x, int y, int rssi)
@@ -528,15 +522,15 @@ static void handleChatTouch(bool press, bool release, bool down, int x, int y)
     if (!chatDragging)
     {
       chatDragging = true;
-      dragLastY = y;
+      dragStartY = y;
+      scrollAtDragStart = chatScroll;
     }
-    int dy = y - dragLastY;
-    dragLastY = y;
+    int dy = y - dragStartY;
     if (dy)
     {
       int contentH = chatContentHeight(aiBusy());
       int maxScroll = max(0, contentH - (CHAT_BOT - CHAT_TOP));
-      chatScroll -= dy;
+      chatScroll = scrollAtDragStart - dy;
       if (chatScroll < 0) chatScroll = 0;
       if (chatScroll > maxScroll) chatScroll = maxScroll;
       dirtyChat = true;
@@ -544,6 +538,7 @@ static void handleChatTouch(bool press, bool release, bool down, int x, int y)
   }
   if (!down) chatDragging = false;
   uint8_t ev = kbHandle(down, x, y);
+  if (ev & KB_LAYOUT) { dirtyFull = true; return; }
   if (ev & KB_CHANGED) dirtyInput = true;
   if (ev & KB_SEND) sendToAi();
 }
@@ -552,21 +547,17 @@ static void handleSettingsTouch(bool press, int x, int y)
 {
   if (!press) return;
   if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_HOME); return; }
-  if (ptIn(x, y, 3, 44, 314, 56)) { scanStart(); gotoScreen(S_WIFI); return; }
-  if (ptIn(x, y, 3, 108, 314, 56)) { enterEdit(0); return; }
-  if (ptIn(x, y, 3, 172, 314, 56)) { enterEdit(1); return; }
-  if (ptIn(x, y, 3, 236, 314, 56)) { enterEdit(2); return; }
-  if (ptIn(x, y, 3, 304, 155, 44)) { scanStart(); gotoScreen(S_WIFI); return; }
-  if (ptIn(x, y, 162, 304, 155, 44)) { gotoScreen(S_API); return; }
-  if (ptIn(x, y, 3, 356, 155, 44)) { dlgClear = true; dirtyFull = true; return; }
-  if (ptIn(x, y, 162, 356, 155, 44))
+  if (ptIn(x, y, 3, 44, 314, 48)) { scanStart(); gotoScreen(S_WIFI); return; }
+  if (ptIn(x, y, 3, 104, 314, 48)) { gotoScreen(S_API); return; }
+  if (ptIn(x, y, 3, 164, 314, 48)) { dlgClear = true; dirtyFull = true; return; }
+  if (ptIn(x, y, 3, 224, 314, 48))
   {
     showToast("正在重启...");
     gfx->flush();
     delay(500);
     ESP.restart();
   }
-  if (ptIn(x, y, 3, 420, 314, 44)) { gotoScreen(S_CHAT); }
+  if (ptIn(x, y, 3, 284, 314, 48)) { gotoScreen(S_CHAT); }
 }
 
 static void handleWifiTouch(bool press, bool release, bool down, int x, int y)
@@ -578,15 +569,14 @@ static void handleWifiTouch(bool press, bool release, bool down, int x, int y)
   }
   if (down && y >= LIST_TOP)
   {
-    if (!listDragging) { listDragging = true; dragLastY = y; }
-    int dy = y - dragLastY;
-    dragLastY = y;
+    if (!listDragging) { listDragging = true; dragStartY = y; scrollAtDragStart = wifiScroll; }
+    int dy = y - dragStartY;
     if (dy)
     {
       int contentH = (int)apList.size() * ITEM_H;
       int viewH = SCREEN_H - 6 - LIST_TOP;
       int maxScroll = max(0, contentH - viewH);
-      wifiScroll -= dy;
+      wifiScroll = scrollAtDragStart - dy;
       if (wifiScroll < 0) wifiScroll = 0;
       if (wifiScroll > maxScroll) wifiScroll = maxScroll;
       dirtyFull = true;
@@ -634,6 +624,7 @@ static void handleWifiPassTouch(bool press, bool down, int x, int y)
     }
   }
   uint8_t ev = kbHandle(down, x, y);
+  if (ev & KB_LAYOUT) { dirtyFull = true; return; }
   if (ev & KB_CHANGED) dirtyInput = true;
   if (ev & KB_SEND)
   {

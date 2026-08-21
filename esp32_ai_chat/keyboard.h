@@ -3,6 +3,7 @@
 
 #define KB_CHANGED 1
 #define KB_SEND    2
+#define KB_LAYOUT  4
 
 void kbAttach(String *buf);
 void kbSetMask(bool m);

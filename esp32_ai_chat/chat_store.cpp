@@ -149,4 +149,10 @@ void chatRender(int top, int h, int scroll, bool busy, int busyPhase)
     wrapMsg(tmp);
     if (y + tmp.bh >= top && y <= top + h) drawBubble(tmp, y);
   }
+  if (maxScroll > 0)
+  {
+    int th = max(24, (int)((long)h * (long)h / contentH));
+    int ty = top + (h - th) * scroll / maxScroll;
+    gfx->fillRect(SCREEN_W - 4, ty, 3, th, COL_SUB);
+  }
 }
