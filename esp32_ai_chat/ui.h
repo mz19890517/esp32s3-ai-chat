@@ -5,6 +5,9 @@
 #ifndef U8G2_USE_LARGE_FONTS
 #define U8G2_USE_LARGE_FONTS
 #endif
+#if !__has_include(<U8g2lib.h>)
+#error "U8g2 library missing: install 'U8g2' by olikraus via Library Manager"
+#endif
 #include <Arduino_GFX_Library.h>
 
 #define TITLE_H  36
