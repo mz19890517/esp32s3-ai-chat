@@ -2,6 +2,9 @@
 #ifndef U8G2_FONT_SUPPORT
 #define U8G2_FONT_SUPPORT
 #endif
+#ifndef U8G2_USE_LARGE_FONTS
+#define U8G2_USE_LARGE_FONTS
+#endif
 #include <Arduino_GFX_Library.h>
 
 #define TITLE_H  36
