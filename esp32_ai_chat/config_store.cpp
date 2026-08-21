@@ -1,4 +1,5 @@
 #include "config_store.h"
+#include "secrets.h"
 #include <Preferences.h>
 
 Config cfg;
@@ -13,6 +14,9 @@ void cfgLoad()
   cfg.key = prefs.getString("key", "");
   cfg.model = prefs.getString("model", "deepseek-chat");
   prefs.end();
+  if (!cfg.ssid.length()) cfg.ssid = DEFAULT_SSID;
+  if (!cfg.wpass.length()) cfg.wpass = DEFAULT_WPASS;
+  if (!cfg.key.length()) cfg.key = DEFAULT_API_KEY;
 }
 
 void cfgSaveWiFi()

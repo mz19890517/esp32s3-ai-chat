@@ -8,7 +8,7 @@
 #include "keyboard.h"
 #include "ai_client.h"
 
-enum Screen : uint8_t { S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API };
+enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI };
 static Screen scr = S_CHAT;
 
 static bool dirtyFull = true;
@@ -199,13 +199,20 @@ static void drawTitleBar()
     drawTextAt(12, centerBaseY(0, TITLE_H), "AI 聊天", COL_TEXT, COL_PANEL);
     bool up = wifiUp();
     gfx->fillCircle(236, TITLE_H / 2, 5, up ? COL_OK : 0xF980);
-    drawBtn(254, 4, 62, 28, "设置", COL_KEY_FN, COL_TEXT);
+    drawBtn(254, 4, 62, 28, "主页", COL_KEY_FN, COL_TEXT);
+  }
+  else if (scr == S_HOME)
+  {
+    drawTextAt(12, centerBaseY(0, TITLE_H), "应用", COL_TEXT, COL_PANEL);
+    bool up = wifiUp();
+    gfx->fillCircle(236, TITLE_H / 2, 5, up ? COL_OK : 0xF980);
   }
   else
   {
-    drawBtn(3, 4, 56, 28, "返回", COL_KEY_FN, COL_TEXT);
+    drawBtn(3, 4, 56, 28, "主页", COL_KEY_FN, COL_TEXT);
     const char *t = (scr == S_SETTINGS) ? "设置" : (scr == S_WIFI) ? "WiFi 设置"
                                      : (scr == S_WIFIPASS)        ? "输入密码"
+                                     : (scr == S_XIAOZHI)         ? "小志"
                                                                   : "API 设置";
     drawTextAt(70, centerBaseY(0, TITLE_H), t, COL_TEXT, COL_PANEL);
   }
@@ -310,10 +317,79 @@ static void drawApiBody()
   drawTextAt(14, 262, "支持任意 OpenAI 兼容接口，如 DeepSeek", COL_SUB, COL_BG);
 }
 
+static void drawChatIcon(int cx, int cy)
+{
+  gfx->fillRoundRect(cx - 20, cy - 16, 40, 28, 8, COL_ACCENT);
+  gfx->fillTriangle(cx - 12, cy + 10, cx - 2, cy + 10, cx - 12, cy + 22, COL_ACCENT);
+  gfx->fillCircle(cx - 9, cy - 2, 3, 0xFFFF);
+  gfx->fillCircle(cx + 1, cy - 2, 3, 0xFFFF);
+  gfx->fillCircle(cx + 11, cy - 2, 3, 0xFFFF);
+}
+
+static void drawMicIcon(int cx, int cy)
+{
+  uint16_t c = COL_ACCENT;
+  gfx->fillRoundRect(cx - 8, cy - 20, 16, 26, 8, c);
+  gfx->fillRect(cx - 13, cy - 6, 3, 10, c);
+  gfx->fillRect(cx + 10, cy - 6, 3, 10, c);
+  gfx->fillRect(cx - 13, cy + 2, 27, 3, c);
+  gfx->fillRect(cx - 2, cy + 5, 4, 8, c);
+  gfx->fillRect(cx - 8, cy + 13, 16, 3, c);
+}
+
+static void drawGearIcon(int cx, int cy)
+{
+  uint16_t c = COL_ACCENT;
+  gfx->fillCircle(cx, cy, 13, c);
+  for (int i = 0; i < 8; i++)
+  {
+    float a = i * 0.785398f;
+    int x = cx + (int)(cosf(a) * 15.5f);
+    int y = cy + (int)(sinf(a) * 15.5f);
+    gfx->fillCircle(x, y, 4, c);
+  }
+  gfx->fillCircle(cx, cy, 6, COL_PANEL);
+}
+
+static void drawHomeBody()
+{
+  struct Tile { int x; const char *label; void (*icon)(int, int); };
+  Tile tiles[3] = {
+    {12, "AI 聊天", drawChatIcon},
+    {116, "小志", drawMicIcon},
+    {220, "设置", drawGearIcon},
+  };
+  for (auto &t : tiles)
+  {
+    gfx->fillRoundRect(t.x, 96, 88, 118, 14, COL_PANEL);
+    gfx->drawRoundRect(t.x, 96, 88, 118, 14, COL_LINE);
+    t.icon(t.x + 44, 142);
+    int tw = textWidth(t.label);
+    drawTextAt(t.x + (88 - tw) / 2, 196, t.label, COL_TEXT, COL_PANEL);
+  }
+  drawTextAt(14, 260, "更多应用敬请期待", COL_SUB, COL_BG);
+}
+
+static void drawXiaozhiBody()
+{
+  gfx->fillRoundRect(3, 60, 314, 200, 12, COL_PANEL);
+  drawMicIcon(160, 140);
+  const char *l1 = "小志语音助手";
+  const char *l2 = "集成开发中，敬请期待";
+  drawTextAt((SCREEN_W - textWidth(l1)) / 2, 190, l1, COL_TEXT, COL_PANEL);
+  drawTextAt((SCREEN_W - textWidth(l2)) / 2, 220, l2, COL_SUB, COL_PANEL);
+}
+
 static void drawBody()
 {
   switch (scr)
   {
+  case S_HOME:
+    drawHomeBody();
+    break;
+  case S_XIAOZHI:
+    drawXiaozhiBody();
+    break;
   case S_CHAT:
     chatRender(CHAT_TOP, CHAT_BOT - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
     break;
@@ -441,7 +517,7 @@ static void handleChatTouch(bool press, bool release, bool down, int x, int y)
   {
     if (ptIn(x, y, 254, 4, 62, 28) || ptIn(x, y, 222, 8, 28, 20))
     {
-      gotoScreen(S_SETTINGS);
+      gotoScreen(S_HOME);
       return;
     }
   }
@@ -473,7 +549,7 @@ static void handleChatTouch(bool press, bool release, bool down, int x, int y)
 static void handleSettingsTouch(bool press, int x, int y)
 {
   if (!press) return;
-  if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_CHAT); return; }
+  if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_HOME); return; }
   if (ptIn(x, y, 3, 44, 314, 56)) { scanStart(); gotoScreen(S_WIFI); return; }
   if (ptIn(x, y, 3, 108, 314, 56)) { enterEdit(0); return; }
   if (ptIn(x, y, 3, 172, 314, 56)) { enterEdit(1); return; }
@@ -607,11 +683,23 @@ static void handleDialogTouch(bool press, int x, int y)
   }
 }
 
+static void handleHomeTouch(bool press, int x, int y)
+{
+  if (!press) return;
+  if (ptIn(x, y, 12, 96, 88, 118)) { gotoScreen(S_CHAT); return; }
+  if (ptIn(x, y, 116, 96, 88, 118)) { gotoScreen(S_XIAOZHI); return; }
+  if (ptIn(x, y, 220, 96, 88, 118)) { gotoScreen(S_SETTINGS); return; }
+}
+
 static void routeTouch(bool press, bool release, bool down, int x, int y)
 {
   if (dlgClear) { handleDialogTouch(press, x, y); return; }
   switch (scr)
   {
+  case S_HOME: handleHomeTouch(press, x, y); break;
+  case S_XIAOZHI:
+    if (press && ptIn(x, y, 3, 4, 56, 28)) gotoScreen(S_HOME);
+    break;
   case S_CHAT: handleChatTouch(press, release, down, x, y); break;
   case S_SETTINGS: handleSettingsTouch(press, x, y); break;
   case S_WIFI: handleWifiTouch(press, release, down, x, y); break;
@@ -648,17 +736,16 @@ void setup()
       delay(150);
     }
   }
+  scr = S_HOME;
   if (ok)
   {
     drawSplash("IP: " + WiFi.localIP().toString());
     delay(1200);
-    scr = S_CHAT;
+    showToast("WiFi 已连接");
   }
   else
   {
-    scr = S_WIFI;
-    scanStart();
-    showToast(cfg.ssid.length() ? "WiFi 连接失败，请重新选择" : "未联网，请选择 WiFi");
+    showToast(cfg.ssid.length() ? "WiFi 连接失败，请在设置中检查" : "未联网，请在设置中配置 WiFi", 3000);
   }
   dirtyFull = true;
 }
