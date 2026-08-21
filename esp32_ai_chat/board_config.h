@@ -8,8 +8,8 @@
 #define PIN_LCD_D2   3
 #define PIN_LCD_D3   4
 #define PIN_LCD_BL   6
-#define PIN_I2C_SDA  21
-#define PIN_I2C_SCL  22
+#define PIN_I2C_SDA  8
+#define PIN_I2C_SCL  7
 
 #define TCA_ADDR     0x20
 #define TCA_REG_OUT  0x02
