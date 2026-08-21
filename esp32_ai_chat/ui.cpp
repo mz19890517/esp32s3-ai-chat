@@ -45,10 +45,27 @@ static uint8_t tcaRd(uint8_t reg)
 
 void ui_init()
 {
+  Serial.begin(115200);
+  delay(300);
+  Serial.println("\n[boot] ui_init start");
+  Serial.printf("[boot] PSRAM size=%u\n", ESP.getPsramSize());
+  pinMode(PIN_LCD_BL, OUTPUT);
+  digitalWrite(PIN_LCD_BL, HIGH);
+  Serial.println("[boot] backlight ON");
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
+  Wire.setClock(400000);
+  Wire.setTimeOut(50);
+  Serial.print("[boot] I2C scan:");
+  for (uint8_t a = 1; a < 127; a++)
+  {
+    Wire.beginTransmission(a);
+    if (Wire.endTransmission() == 0) Serial.printf(" 0x%02X", a);
+  }
+  Serial.println();
   uint8_t cfg = tcaRd(TCA_REG_CFG) & ~TCA_BIT_RST;
   tcaWr(TCA_REG_CFG, cfg);
   uint8_t out = tcaRd(TCA_REG_OUT);
+  Serial.printf("[boot] TCA cfg=0x%02X out=0x%02X\n", cfg, out);
   tcaWr(TCA_REG_OUT, out | TCA_BIT_RST);
   delay(10);
   tcaWr(TCA_REG_OUT, out & ~TCA_BIT_RST);
@@ -57,15 +74,15 @@ void ui_init()
   delay(200);
 
   gfx = new Arduino_Canvas(SCREEN_W, SCREEN_H, &lcdPanel, 0, 0, 0);
-  gfx->begin();
+  bool bok = gfx->begin();
+  Serial.printf("[boot] gfx begin=%d\n", (int)bok);
   gfx->fillScreen(COL_BG);
   gfx->setTextSize(1);
   gfx->setFont(AI_FONT);
   gfx->setUTF8Print(true);
 
-  pinMode(PIN_LCD_BL, OUTPUT);
-  digitalWrite(PIN_LCD_BL, HIGH);
   gfx->flush();
+  Serial.println("[boot] ui_init done");
 }
 
 int textWidth(const char *s)

@@ -623,6 +623,8 @@ static void routeTouch(bool press, bool release, bool down, int x, int y)
 void setup()
 {
   Serial.begin(115200);
+  delay(300);
+  Serial.println("\n[boot] setup enter");
   cfgLoad();
   ui_init();
   touchInit();
