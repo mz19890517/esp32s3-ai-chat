@@ -30,7 +30,11 @@ jobs:
           truncate -s 32768 merged_flash.bin
           cat .pio/build/esp32s3/partitions.bin >> merged_flash.bin
           truncate -s 57344 merged_flash.bin
-          cat .pio/build/esp32s3/boot_app0.bin >> merged_flash.bin
+          if [ -f .pio/build/esp32s3/boot_app0.bin ]; then
+            cat .pio/build/esp32s3/boot_app0.bin >> merged_flash.bin
+          else
+            head -c 8192 /dev/zero | tr '\0' '\377' >> merged_flash.bin
+          fi
           truncate -s 65536 merged_flash.bin
           cat .pio/build/esp32s3/firmware.bin >> merged_flash.bin
           ls -l merged_flash.bin
