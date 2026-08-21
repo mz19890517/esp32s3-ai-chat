@@ -26,14 +26,14 @@ jobs:
         run: pio run
       - name: Merge flash image
         run: |
-          python3 -c "
-import pathlib
-boot = pathlib.Path('.pio/build/esp32s3/bootloader.bin').read_bytes()
-part = pathlib.Path('.pio/build/esp32s3/partitions.bin').read_bytes()
-boot_app = pathlib.Path('.pio/build/esp32s3/boot_app0.bin').read_bytes()
-firmware = pathlib.Path('.pio/build/esp32s3/firmware.bin').read_bytes()
-pathlib.Path('merged_flash.bin').write_bytes(boot + part + boot_app + firmware)
-"
+          cp .pio/build/esp32s3/bootloader.bin merged_flash.bin
+          truncate -s 32768 merged_flash.bin
+          cat .pio/build/esp32s3/partitions.bin >> merged_flash.bin
+          truncate -s 57344 merged_flash.bin
+          cat .pio/build/esp32s3/boot_app0.bin >> merged_flash.bin
+          truncate -s 65536 merged_flash.bin
+          cat .pio/build/esp32s3/firmware.bin >> merged_flash.bin
+          ls -l merged_flash.bin
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:
