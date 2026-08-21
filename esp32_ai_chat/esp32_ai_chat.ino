@@ -2,6 +2,7 @@
 #include <algorithm>
 #include "board_config.h"
 #include "ui.h"
+#include "secrets.h"
 #include "touch_driver.h"
 #include "config_store.h"
 #include "chat_store.h"
@@ -314,7 +315,8 @@ static void drawApiBody()
     drawTextAt(296, c.y + 19, ">", COL_SUB, COL_PANEL);
   }
   drawBtn(3, 216, 314, 44, "保存设置", COL_ACCENT, 0xFFFF);
-  drawTextAt(14, 262, "支持任意 OpenAI 兼容接口，如 DeepSeek", COL_SUB, COL_BG);
+  drawBtn(3, 264, 155, 36, "预设:云端", COL_KEY_FN, COL_TEXT);
+  drawBtn(162, 264, 155, 36, "预设:本地", COL_KEY_FN, COL_TEXT);
 }
 
 static void drawChatIcon(int cx, int cy)
@@ -666,7 +668,25 @@ static void handleApiTouch(bool press, bool down, int x, int y)
   if (ptIn(x, y, 3, 44, 314, 48)) { enterEdit(0); return; }
   if (ptIn(x, y, 3, 100, 314, 48)) { enterEdit(1); return; }
   if (ptIn(x, y, 3, 156, 314, 48)) { enterEdit(2); return; }
-  if (ptIn(x, y, 3, 216, 314, 44)) { cfgSaveApi(); showToast("已保存"); }
+  if (ptIn(x, y, 3, 216, 314, 44)) { cfgSaveApi(); showToast("已保存"); return; }
+  if (ptIn(x, y, 3, 264, 155, 36))
+  {
+    cfg.url = "https://api.deepseek.com";
+    cfg.model = "deepseek-chat";
+    cfgSaveApi();
+    showToast("已切换云端 DeepSeek");
+    dirtyFull = true;
+    return;
+  }
+  if (ptIn(x, y, 162, 264, 155, 36))
+  {
+    cfg.url = DEFAULT_URL;
+    cfg.model = DEFAULT_MODEL;
+    cfgSaveApi();
+    showToast("已切换本地服务");
+    dirtyFull = true;
+    return;
+  }
 }
 
 static void handleDialogTouch(bool press, int x, int y)

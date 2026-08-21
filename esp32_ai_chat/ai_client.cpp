@@ -1,4 +1,5 @@
 #include "ai_client.h"
+#include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <HTTPClient.h>
 #include <ArduinoJson.h>
@@ -37,9 +38,15 @@ static void doRequest(const std::vector<AiMsg> &hist, const String &url, const S
   String body;
   serializeJson(doc, body);
 
-  WiFiClientSecure cli;
-  cli.setInsecure();
-  cli.setHandshakeTimeout(15);
+  WiFiClientSecure scl;
+  WiFiClient pcl;
+  bool tls = url.startsWith("https");
+  WiFiClient &cli = tls ? static_cast<WiFiClient &>(scl) : static_cast<WiFiClient &>(pcl);
+  if (tls)
+  {
+    scl.setInsecure();
+    scl.setHandshakeTimeout(15);
+  }
   HTTPClient http;
   http.setTimeout(90000);
   if (!http.begin(cli, url))

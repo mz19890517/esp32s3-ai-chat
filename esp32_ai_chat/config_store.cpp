@@ -10,13 +10,15 @@ void cfgLoad()
   prefs.begin("aichat", true);
   cfg.ssid = prefs.getString("ssid", "");
   cfg.wpass = prefs.getString("wpass", "");
-  cfg.url = prefs.getString("url", "https://api.deepseek.com");
+  cfg.url = prefs.getString("url", "");
   cfg.key = prefs.getString("key", "");
-  cfg.model = prefs.getString("model", "deepseek-chat");
+  cfg.model = prefs.getString("model", "");
   prefs.end();
   if (!cfg.ssid.length()) cfg.ssid = DEFAULT_SSID;
   if (!cfg.wpass.length()) cfg.wpass = DEFAULT_WPASS;
   if (!cfg.key.length()) cfg.key = DEFAULT_API_KEY;
+  if (!cfg.url.length()) cfg.url = DEFAULT_URL;
+  if (!cfg.model.length()) cfg.model = DEFAULT_MODEL;
 }
 
 void cfgSaveWiFi()
