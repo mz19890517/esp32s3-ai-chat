@@ -19,6 +19,11 @@ static bool dirtyInput = false;
 static int chatScroll = 0;
 static String draft;
 
+static int chatViewBot()
+{
+  return kbIsHidden() ? SCREEN_H - INPUT_H : CHAT_BOT;
+}
+
 static String toastMsg;
 static uint32_t toastUntil = 0;
 static bool needRestore = false;
@@ -28,6 +33,7 @@ static bool dlgClear = false;
 struct ApInfo { String ssid; int rssi; };
 static std::vector<ApInfo> apList;
 static bool scanPending = false;
+static int scanRetry = 0;
 static int wifiScroll = 0;
 
 static String selSsid;
@@ -111,6 +117,7 @@ static void serviceWifiConnect()
 static void scanStart()
 {
   apList.clear();
+  scanRetry = 0;
   WiFi.scanNetworks(true, true);
   scanPending = true;
   dirtyFull = true;
@@ -138,7 +145,14 @@ static void serviceScan()
   }
   else if (n == WIFI_SCAN_FAILED)
   {
-    scanPending = false;
+    WiFi.scanDelete();
+    if (scanRetry < 2)
+    {
+      scanRetry++;
+      delay(50);
+      WiFi.scanNetworks(true, true);
+    }
+    else scanPending = false;
   }
 }
 
@@ -387,7 +401,7 @@ static void drawBody()
     drawXiaozhiBody();
     break;
   case S_CHAT:
-    chatRender(CHAT_TOP, CHAT_BOT - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
+    chatRender(CHAT_TOP, chatViewBot() - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
     break;
   case S_SETTINGS:
     drawSettingsBody();
@@ -462,7 +476,7 @@ static void compose()
   {
     if (dirtyChat && scr == S_CHAT)
     {
-      chatRender(CHAT_TOP, CHAT_BOT - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
+      chatRender(CHAT_TOP, chatViewBot() - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
       need = true;
     }
     if (dirtyInput && inputLineVisible())
@@ -517,7 +531,8 @@ static void handleChatTouch(bool press, bool release, bool down, int x, int y)
       return;
     }
   }
-  if (down && !press && y >= CHAT_TOP && y < CHAT_BOT)
+  int cb = chatViewBot();
+  if (down && !press && y >= CHAT_TOP && y < cb)
   {
     if (!chatDragging)
     {
@@ -529,8 +544,8 @@ static void handleChatTouch(bool press, bool release, bool down, int x, int y)
     if (dy)
     {
       int contentH = chatContentHeight(aiBusy());
-      int maxScroll = max(0, contentH - (CHAT_BOT - CHAT_TOP));
-      chatScroll = scrollAtDragStart - dy;
+      int maxScroll = max(0, contentH - (cb - CHAT_TOP));
+      chatScroll = scrollAtDragStart + dy;
       if (chatScroll < 0) chatScroll = 0;
       if (chatScroll > maxScroll) chatScroll = maxScroll;
       dirtyChat = true;
@@ -805,7 +820,7 @@ void loop()
   if (millis() - lastWatchdog > 15000)
   {
     lastWatchdog = millis();
-    if (cfg.ssid.length() && !wifiUp() && !wcConnecting)
+    if (cfg.ssid.length() && !wifiUp() && !wcConnecting && !scanPending)
       WiFi.begin(cfg.ssid.c_str(), cfg.wpass.c_str());
   }
 

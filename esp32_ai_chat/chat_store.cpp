@@ -9,6 +9,9 @@ static const int BUB_PAD = 10;
 static const int BUB_VPAD = 6;
 static const int MSG_GAP = 10;
 
+static int curTop = CHAT_TOP;
+static int curBot = CHAT_BOT;
+
 static bool breakable(const String &s, unsigned i)
 {
   uint8_t c = (uint8_t)s[i];
@@ -108,10 +111,10 @@ static void drawBubble(ChatMsg &m, int by)
   int bx = m.user ? (SCREEN_W - 10 - m.bw) : 10;
   uint16_t bg = m.err ? COL_ERR_BG : (m.user ? COL_ACCENT_DK : COL_PANEL_HI);
   uint16_t fg = m.err ? COL_ERR_TX : COL_TEXT;
-  int cy0 = max(by, CHAT_TOP);
-  int cy1 = min(by + m.bh, CHAT_BOT);
+  int cy0 = max(by, curTop);
+  int cy1 = min(by + m.bh, curBot);
   if (cy1 <= cy0) return;
-  if (by >= CHAT_TOP && by + m.bh <= CHAT_BOT)
+  if (by >= curTop && by + m.bh <= curBot)
     gfx->fillRoundRect(bx, by, m.bw, m.bh, 8, bg);
   else
     gfx->fillRect(bx, cy0, m.bw, cy1 - cy0, bg);
@@ -119,7 +122,7 @@ static void drawBubble(ChatMsg &m, int by)
   for (auto &l : m.lines)
   {
     int base = ty + FONT_ASC;
-    if (base - FONT_ASC >= CHAT_TOP && base + 4 <= CHAT_BOT && l.length())
+    if (base - FONT_ASC >= curTop && base + 4 <= curBot && l.length())
       drawTextAt(bx + BUB_PAD, base, l, fg, bg);
     ty += LINE_H;
   }
@@ -127,6 +130,8 @@ static void drawBubble(ChatMsg &m, int by)
 
 void chatRender(int top, int h, int scroll, bool busy, int busyPhase)
 {
+  curTop = top;
+  curBot = top + h;
   gfx->fillRect(0, top, SCREEN_W, h, COL_BG);
   int contentH = chatContentHeight(busy);
   int maxScroll = max(0, contentH - h);
@@ -152,7 +157,7 @@ void chatRender(int top, int h, int scroll, bool busy, int busyPhase)
   if (maxScroll > 0)
   {
     int th = max(24, (int)((long)h * (long)h / contentH));
-    int ty = top + (h - th) * scroll / maxScroll;
+    int ty = top + (h - th) * (maxScroll - scroll) / maxScroll;
     gfx->fillRect(SCREEN_W - 4, ty, 3, th, COL_SUB);
   }
 }

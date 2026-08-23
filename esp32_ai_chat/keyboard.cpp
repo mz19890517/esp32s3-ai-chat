@@ -52,6 +52,17 @@ static int candHitsN = 0;
 
 static KeyRect keys[40];
 static int keyCount = 0;
+static bool latch = false;
+
+static int inputLineY()
+{
+  return hidden ? SCREEN_H - INPUT_H : INPUT_Y;
+}
+
+bool kbIsHidden()
+{
+  return hidden;
+}
 
 void kbAttach(String *buf) { target = buf; }
 void kbSetMask(bool m) { mask = m; }
@@ -244,8 +255,7 @@ void kbDraw()
 {
   if (hidden)
   {
-    gfx->fillRect(0, INPUT_Y + INPUT_H, SCREEN_W, SCREEN_H - INPUT_Y - INPUT_H, COL_BG);
-    drawBtn(110, KB_TOP + 40, 100, 36, "显示键盘", COL_KEY_FN, COL_TEXT);
+    gfx->fillRect(0, inputLineY() + INPUT_H, SCREEN_W, SCREEN_H - inputLineY() - INPUT_H, COL_BG);
     return;
   }
   buildLayout();
@@ -257,9 +267,10 @@ void kbDraw()
 
 void kbDrawInputLine()
 {
-  gfx->fillRect(0, INPUT_Y, SCREEN_W, INPUT_H, COL_PANEL);
-  gfx->drawFastHLine(0, INPUT_Y, SCREEN_W, COL_LINE);
-  drawBtn(274, INPUT_Y + 3, 42, 22, hidden ? "键盘" : "收起", COL_KEY_FN, COL_TEXT);
+  int iy = inputLineY();
+  gfx->fillRect(0, iy, SCREEN_W, INPUT_H, COL_PANEL);
+  gfx->drawFastHLine(0, iy, SCREEN_W, COL_LINE);
+  drawBtn(274, iy + 3, 42, 22, hidden ? "键盘" : "收起", COL_KEY_FN, COL_TEXT);
   if (!target) return;
   String show;
   if (mask)
@@ -270,7 +281,7 @@ void kbDrawInputLine()
   else show = *target;
   show += ((millis() / 500) & 1) ? "_" : "";
   show = fitTail(show, SCREEN_W - 70);
-  drawTextAt(8, centerBaseY(INPUT_Y, INPUT_H), show, COL_TEXT, COL_PANEL);
+  drawTextAt(8, centerBaseY(iy, INPUT_H), show, COL_TEXT, COL_PANEL);
 }
 
 static void backspace()
@@ -290,25 +301,20 @@ uint8_t kbHandle(bool down, int x, int y)
       drawKey(pressedKey, false);
       pressedKey = -1;
     }
+    latch = false;
     return 0;
   }
-  if (ptIn(x, y, 274, INPUT_Y + 3, 42, 22))
+  if (latch) return 0;
+  if (ptIn(x, y, 274, inputLineY() + 3, 42, 22))
   {
     hidden = !hidden;
     pyBuf.clear();
     cands.clear();
     candPage = 0;
+    latch = true;
     return KB_LAYOUT;
   }
-  if (hidden)
-  {
-    if (ptIn(x, y, 110, KB_TOP + 40, 100, 36))
-    {
-      hidden = false;
-      return KB_LAYOUT;
-    }
-    return 0;
-  }
+  if (hidden) return 0;
   if (cnMode && y >= KB_TOP && y < KB_TOP + BAR_H)
   {
     if (ptIn(x, y, SCREEN_W - 52, KB_TOP + 2, 24, BAR_H - 4))
@@ -384,6 +390,7 @@ uint8_t kbHandle(bool down, int x, int y)
       cands.clear();
       candPage = 0;
       ev |= KB_LAYOUT;
+      latch = true;
       kbDraw();
       break;
     case K_BACK:

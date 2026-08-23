@@ -14,3 +14,4 @@ String kbPeek();
 void kbDraw();
 void kbDrawInputLine();
 uint8_t kbHandle(bool down, int x, int y);
+bool kbIsHidden();
