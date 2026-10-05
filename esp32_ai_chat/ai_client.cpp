@@ -13,14 +13,14 @@ static const size_t MAX_REPLY = 8000;
 static SemaphoreHandle_t mtx;
 static SemaphoreHandle_t sem;
 static std::vector<AiMsg> reqHist;
-static String reqUrl, reqKey, reqModel;
+static String reqUrl, reqKey, reqModel, reqSys;
 static volatile bool busy = false;
 static volatile bool done = false;
 static String resultReply, resultErr;
 
 bool aiBusy() { return busy; }
 
-static void doRequest(const std::vector<AiMsg> &hist, const String &url, const String &key, const String &model, String &reply, String &err)
+static void doRequest(const std::vector<AiMsg> &hist, const String &url, const String &key, const String &model, const String &sysPrompt, String &reply, String &err)
 {
   JsonDocument doc;
   doc["model"] = model;
@@ -28,7 +28,7 @@ static void doRequest(const std::vector<AiMsg> &hist, const String &url, const S
   JsonArray arr = doc["messages"].to<JsonArray>();
   JsonObject sys = arr.add<JsonObject>();
   sys["role"] = "system";
-  sys["content"] = SYSTEM_PROMPT;
+  sys["content"] = sysPrompt.length() ? sysPrompt : SYSTEM_PROMPT;
   for (auto &m : hist)
   {
     JsonObject o = arr.add<JsonObject>();
@@ -101,16 +101,17 @@ static void taskFn(void *)
   {
     xSemaphoreTake(sem, portMAX_DELAY);
     std::vector<AiMsg> hist;
-    String url, key, model;
+    String url, key, model, sysp;
     xSemaphoreTake(mtx, portMAX_DELAY);
     hist = reqHist;
     url = reqUrl;
     key = reqKey;
     model = reqModel;
+    sysp = reqSys;
     xSemaphoreGive(mtx);
 
     String reply, err;
-    doRequest(hist, url, key, model, reply, err);
+    doRequest(hist, url, key, model, sysp, reply, err);
 
     xSemaphoreTake(mtx, portMAX_DELAY);
     resultReply = reply;
@@ -130,11 +131,17 @@ void aiBegin()
 
 void aiStart(const std::vector<AiMsg> &history, const String &url, const String &key, const String &model)
 {
+  aiStartEx(history, url, key, model, "");
+}
+
+void aiStartEx(const std::vector<AiMsg> &history, const String &url, const String &key, const String &model, const String &sysPrompt)
+{
   xSemaphoreTake(mtx, portMAX_DELAY);
   reqHist = history;
   reqUrl = url;
   reqKey = key;
   reqModel = model;
+  reqSys = sysPrompt;
   done = false;
   busy = true;
   xSemaphoreGive(mtx);

@@ -8,8 +8,10 @@
 #include "chat_store.h"
 #include "keyboard.h"
 #include "ai_client.h"
+#include "frame_log.h"
+#include "serial_link.h"
 
-enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI };
+enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI, S_SERIAL, S_FRAMES, S_AIANA };
 static Screen scr = S_CHAT;
 
 static bool dirtyFull = true;
@@ -55,6 +57,27 @@ static uint8_t lastBusyPhase = 0xFF;
 static uint8_t lastBlink = 0;
 static uint32_t lastWatchdog = 0;
 
+static const int TERM_TOP = 162;
+static const int ANS_TOP = 126;
+static const int ANS_BOT = 426;
+
+static std::vector<String> termLines;
+static std::vector<uint8_t> termTx;
+static int serialScroll = 0;
+static bool serialEol = true;
+static size_t lastFrameCount = 0;
+static String lastSlStatus;
+
+static int framesScroll = 0;
+static int anaIdx = -1;
+static int anaScroll = 0;
+static bool anaWorking = false;
+static String anaErr;
+static std::vector<String> anaLines;
+static uint8_t aiOwner = 0;
+
+static const char *AI_SYS_ANALYZE = "你是一位嵌入式通信协议分析专家，精通 BLE、串口、AT 指令和各类 IoT 设备协议解析。用简洁准确的中文回答，尽量给出字节级别的解释，不要编造不存在的协议。";
+
 static const int LIST_TOP = 76;
 static const int ITEM_H = 44;
 
@@ -76,6 +99,132 @@ static void showToast(const String &s, uint32_t ms = 2000)
 static bool wifiUp()
 {
   return WiFi.status() == WL_CONNECTED;
+}
+
+static void wrapLines(const String &s, int maxW, std::vector<String> &out)
+{
+  out.clear();
+  String line;
+  int w = 0;
+  int i = 0;
+  while (i < s.length())
+  {
+    uint8_t c = (uint8_t)s[i];
+    int cl = (c < 0x80) ? 1 : (c < 0xE0 ? 2 : (c < 0xF0 ? 3 : 4));
+    if (i + cl > s.length()) cl = s.length() - i;
+    int cw = (cl == 1) ? 9 : 17;
+    if (w + cw > maxW && line.length())
+    {
+      out.push_back(line);
+      line = "";
+      w = 0;
+    }
+    line += s.substring(i, i + cl);
+    w += cw;
+    i += cl;
+  }
+  out.push_back(line);
+}
+
+static void buildTermLines()
+{
+  termLines.clear();
+  termTx.clear();
+  for (auto &f : frames)
+  {
+    String head = String(f.rx ? "RX " : "TX ") + flTime(f.ms) + " " + String(f.len) + "B ";
+    String body = flHexMode ? f.hex : f.text;
+    if (!body.length()) body = flHexMode ? "(空)" : "(无可打印内容)";
+    std::vector<String> ls;
+    wrapLines(head + body, 296, ls);
+    for (auto &l : ls)
+    {
+      termLines.push_back(l);
+      termTx.push_back(f.rx ? 0 : 1);
+    }
+  }
+}
+
+static int hexToBytes(const String &s, uint8_t *out, int maxLen)
+{
+  int n = 0;
+  int hi = -1;
+  for (int i = 0; i < s.length() && n < maxLen; i++)
+  {
+    int c = (uint8_t)s[i];
+    int v = -1;
+    if (c >= '0' && c <= '9') v = c - '0';
+    else if (c >= 'a' && c <= 'f') v = c - 'a' + 10;
+    else if (c >= 'A' && c <= 'F') v = c - 'A' + 10;
+    else if (c == ' ' || c == ',') continue;
+    else return -1;
+    if (hi < 0) hi = v;
+    else
+    {
+      out[n++] = (uint8_t)((hi << 4) | v);
+      hi = -1;
+    }
+  }
+  return (hi < 0) ? n : -1;
+}
+
+static void serialSend()
+{
+  String s = kbPeek();
+  s.trim();
+  if (!s.length()) { showToast("请输入要发送的内容"); return; }
+  if (!slActive())
+  {
+    showToast(slMode() == LINK_BLE ? "BLE 尚未连接" : "TCP 尚未连接");
+    return;
+  }
+  if (flHexMode)
+  {
+    uint8_t buf[256];
+    int n = hexToBytes(s, buf, sizeof(buf));
+    if (n <= 0) { showToast("HEX 格式错误，例如 AA 55 01"); return; }
+    String bin;
+    bin.reserve(n);
+    bin.concat((const char *)buf, n);
+    if (!slSend(bin)) { showToast("发送失败"); return; }
+    kbTake();
+    flAddTxRaw(buf, n);
+  }
+  else
+  {
+    String out = s;
+    if (serialEol) out += "\r\n";
+    if (!slSend(out)) { showToast("发送失败"); return; }
+    kbTake();
+    flAddTx(s);
+  }
+  dirtyInput = true;
+  dirtyFull = true;
+}
+
+static void startAnalyze(int idx)
+{
+  if (idx < 0 || idx >= (int)frames.size()) { showToast("报文已过期"); return; }
+  if (!wifiUp()) { showToast("未联网，请先在设置中配置 WiFi"); return; }
+  if (aiBusy()) { showToast("AI 正在回复，请稍候"); return; }
+  FrameRec f = frames[idx];
+  String p = "请分析这条串口报文。\n";
+  p += String("方向: ") + (f.rx ? "设备接收" : "设备发送") + "\n";
+  p += "时间: " + flTime(f.ms) + "\n";
+  p += "长度: " + String(f.len) + " 字节\n";
+  p += "十六进制: " + f.hex + "\n";
+  p += "可打印文本: " + (f.text.length() ? f.text : String("无")) + "\n\n";
+  p += "请用中文回答: 1) 这可能是哪个协议或哪条指令; 2) 逐字节拆解每个字段的含义; 3) 有无异常或风险; 4) 如果需要回复该指令，建议发送什么内容。";
+  std::vector<AiMsg> hist;
+  hist.push_back({"user", p});
+  anaIdx = idx;
+  anaScroll = 0;
+  anaErr = "";
+  anaLines.clear();
+  anaWorking = true;
+  aiOwner = 1;
+  aiStartEx(hist, apiEndpoint(cfg.url), cfg.key, cfg.model, AI_SYS_ANALYZE);
+  gotoScreen(S_AIANA);
 }
 
 static void startWifiConnect(const String &ssid, const String &pw)
@@ -182,10 +331,25 @@ static void serviceAi()
 {
   String rep, err;
   if (!aiPoll(rep, err)) return;
-  if (err.length()) chatAdd(false, "[错误] " + err, true);
-  else chatAdd(false, rep);
-  chatScroll = 0;
-  dirtyChat = true;
+  if (aiOwner == 1)
+  {
+    anaWorking = false;
+    if (err.length()) anaErr = err;
+    else
+    {
+      wrapLines(rep, 296, anaLines);
+      anaScroll = 0;
+    }
+    if (scr == S_AIANA) dirtyFull = true;
+  }
+  else
+  {
+    if (err.length()) chatAdd(false, "[错误] " + err, true);
+    else chatAdd(false, rep);
+    chatScroll = 0;
+    dirtyChat = true;
+  }
+  aiOwner = 0;
 }
 
 static void drawSplash(const String &msg)
@@ -225,10 +389,13 @@ static void drawTitleBar()
   else
   {
     drawBtn(3, 4, 56, 28, "主页", COL_KEY_FN, COL_TEXT);
-    const char *t = (scr == S_SETTINGS) ? "设置" : (scr == S_WIFI) ? "WiFi 设置"
+const char *t = (scr == S_SETTINGS) ? "设置" : (scr == S_WIFI) ? "WiFi 设置"
                                      : (scr == S_WIFIPASS)        ? "输入密码"
                                      : (scr == S_XIAOZHI)         ? "小志"
-                                                                  : "API 设置";
+                                     : (scr == S_SERIAL)          ? "串口助手"
+                                     : (scr == S_FRAMES)          ? "报文记录"
+                                     : (scr == S_AIANA)           ? "AI 报文分析"
+                                                                   : "API 设置";
     drawTextAt(70, centerBaseY(0, TITLE_H), t, COL_TEXT, COL_PANEL);
   }
 }
@@ -361,23 +528,140 @@ static void drawGearIcon(int cx, int cy)
   gfx->fillCircle(cx, cy, 6, COL_PANEL);
 }
 
+static void drawTermIcon(int cx, int cy)
+{
+  gfx->drawRoundRect(cx - 24, cy - 16, 48, 32, 6, COL_ACCENT);
+  gfx->fillRect(cx - 22, cy - 7, 44, 2, COL_ACCENT);
+  for (int i = 0; i < 2; i++) gfx->fillRect(cx - 18, cy + 2 + i * 8, 22 - i * 8, 2, COL_ACCENT);
+  gfx->fillTriangle(cx + 2, cy - 4, cx + 18, cy + 4, cx + 2, cy + 12, COL_ACCENT);
+}
+
 static void drawHomeBody()
 {
   struct Tile { int x; const char *label; void (*icon)(int, int); };
-  Tile tiles[3] = {
-    {12, "AI 聊天", drawChatIcon},
-    {116, "小志", drawMicIcon},
-    {220, "设置", drawGearIcon},
+  Tile tiles[4] = {
+    {6, "聊天", drawChatIcon},
+    {86, "串口", drawTermIcon},
+    {166, "小志", drawMicIcon},
+    {246, "设置", drawGearIcon},
   };
   for (auto &t : tiles)
   {
-    gfx->fillRoundRect(t.x, 96, 88, 118, 14, COL_PANEL);
-    gfx->drawRoundRect(t.x, 96, 88, 118, 14, COL_LINE);
-    t.icon(t.x + 44, 142);
+    gfx->fillRoundRect(t.x, 96, 72, 118, 14, COL_PANEL);
+    gfx->drawRoundRect(t.x, 96, 72, 118, 14, COL_LINE);
+    t.icon(t.x + 36, 142);
     int tw = textWidth(t.label);
-    drawTextAt(t.x + (88 - tw) / 2, 196, t.label, COL_TEXT, COL_PANEL);
+    drawTextAt(t.x + (72 - tw) / 2, 196, t.label, COL_TEXT, COL_PANEL);
   }
   drawTextAt(14, 260, "更多应用敬请期待", COL_SUB, COL_BG);
+}
+
+static void drawSerialBody()
+{
+  bool ble = (slMode() == LINK_BLE);
+  bool on = slActive();
+  drawBtn(3, 40, 100, 32, "BLE 模式", ble ? COL_ACCENT : COL_KEY_FN, 0xFFFF);
+  drawBtn(110, 40, 100, 32, "TCP 模式", ble ? COL_KEY_FN : COL_ACCENT, 0xFFFF);
+  drawBtn(217, 40, 100, 32, "清空记录", COL_KEY_FN, COL_TEXT);
+
+  gfx->fillCircle(12, 82, 5, on ? COL_OK : 0xF980);
+  drawTextAt(24, 87, fitTail(slStatus(), 280), on ? COL_TEXT : COL_SUB, COL_BG);
+  String hint = ble ? "手机用 BLE 串口助手搜索并连接本设备"
+                    : String("电脑或手机用 TCP 工具连 ") + slLocalIp() + ":" + String(SL_TCP_PORT);
+  drawTextAt(10, 110, fitTail(hint, 300), COL_SUB, COL_BG);
+
+  drawBtn(3, 122, 76, 32, flHexMode ? "HEX 开" : "HEX 关", flHexMode ? COL_ACCENT : COL_KEY_FN, 0xFFFF);
+  drawBtn(83, 122, 76, 32, serialEol ? "换行 开" : "换行 关", serialEol ? COL_ACCENT : COL_KEY_FN, 0xFFFF);
+  drawBtn(163, 122, 76, 32, "发送", COL_ACCENT, 0xFFFF);
+  drawBtn(243, 122, 74, 32, "报文记录", COL_KEY_FN, COL_TEXT);
+
+  int cb = chatViewBot();
+  gfx->fillRoundRect(3, TERM_TOP, 314, cb - TERM_TOP, 8, COL_PANEL);
+  buildTermLines();
+  int viewH = cb - TERM_TOP - 6;
+  int maxScroll = max(0, (int)termLines.size() * LINE_H - viewH);
+  if (serialScroll > maxScroll) serialScroll = maxScroll;
+  if (serialScroll < 0) serialScroll = 0;
+  if (!termLines.size())
+  {
+    drawTextAt((SCREEN_W - textWidth("暂无数据")) / 2, TERM_TOP + 28, "暂无数据", COL_SUB, COL_PANEL);
+    return;
+  }
+  int i0 = max(0, (serialScroll + LINE_H - 1) / LINE_H);
+  for (int i = i0; i < (int)termLines.size(); i++)
+  {
+    int ly = TERM_TOP + 4 + i * LINE_H - serialScroll;
+    if (ly + LINE_H > cb - 4) break;
+    drawTextAt(10, ly + 17, termLines[i], termTx[i] ? COL_ACCENT : COL_TEXT, COL_PANEL);
+  }
+}
+
+static void drawFramesBody()
+{
+  String head = "共 " + String((int)frames.size()) + " 条记录，点击查看并 AI 分析";
+  drawTextAt(12, 58, fitTail(head, 296), COL_SUB, COL_BG);
+  int contentH = (int)frames.size() * ITEM_H;
+  int viewH = SCREEN_H - 6 - LIST_TOP;
+  int maxScroll = max(0, contentH - viewH);
+  if (framesScroll > maxScroll) framesScroll = maxScroll;
+  for (int i = 0; i < (int)frames.size(); i++)
+  {
+    int iy = LIST_TOP + i * ITEM_H - framesScroll;
+    if (iy + ITEM_H < LIST_TOP || iy > SCREEN_H) continue;
+    FrameRec &f = frames[i];
+    gfx->fillRoundRect(3, iy, 314, ITEM_H - 6, 8, COL_PANEL);
+    String l1 = String(f.rx ? "RX " : "TX ") + flTime(f.ms) + "  " + String(f.len) + " 字节";
+    drawTextAt(12, iy + 15, l1, f.rx ? COL_TEXT : COL_ACCENT, COL_PANEL);
+    String body = flHexMode ? f.hex : f.text;
+    drawTextAt(12, iy + 32, fitTail(body.length() ? body : (flHexMode ? "(空)" : "(无可打印内容)"), 296), COL_SUB, COL_PANEL);
+  }
+}
+
+static void drawAnaBody()
+{
+  if (anaIdx < 0 || anaIdx >= (int)frames.size())
+  {
+    drawTextAt(12, 120, "报文已过期，请重新选择", COL_SUB, COL_BG);
+    drawBtn(3, SCREEN_H - 48, 314, 40, "返回报文记录", COL_KEY_FN, COL_TEXT);
+    return;
+  }
+  FrameRec f = frames[anaIdx];
+  gfx->fillRoundRect(3, 42, 314, 76, 8, COL_PANEL);
+  drawTextAt(12, 62, String(f.rx ? "接收 RX " : "发送 TX ") + flTime(f.ms) + "  " + String(f.len) + " 字节", COL_SUB, COL_PANEL);
+  std::vector<String> hl;
+  wrapLines(f.hex.length() ? f.hex : "(空)", 296, hl);
+  for (int i = 0; i < (int)hl.size() && i < 3; i++)
+    drawTextAt(12, 80 + i * 18, hl[i], COL_TEXT, COL_PANEL);
+
+  gfx->fillRoundRect(3, ANS_TOP, 314, ANS_BOT - ANS_TOP, 8, COL_PANEL);
+  if (anaWorking)
+  {
+    drawTextAt(12, centerBaseY(ANS_TOP, 40), "AI 分析中，请稍候...", COL_ACCENT, COL_PANEL);
+  }
+  else if (anaErr.length())
+  {
+    drawTextAt(12, ANS_TOP + 20, fitTail("[错误] " + anaErr, 296), COL_ERR_TX, COL_PANEL);
+  }
+  else if (!anaLines.size())
+  {
+    drawTextAt(12, centerBaseY(ANS_TOP, 40), "点击下方按钮开始分析", COL_SUB, COL_PANEL);
+  }
+  else
+  {
+    int viewH = ANS_BOT - ANS_TOP - 8;
+    int maxScroll = max(0, (int)anaLines.size() * LINE_H - viewH);
+    if (anaScroll > maxScroll) anaScroll = maxScroll;
+    if (anaScroll < 0) anaScroll = 0;
+    int i0 = max(0, (anaScroll + LINE_H - 1) / LINE_H);
+    for (int i = i0; i < (int)anaLines.size(); i++)
+    {
+      int ly = ANS_TOP + 4 + i * LINE_H - anaScroll;
+      if (ly + LINE_H > ANS_BOT - 4) break;
+      drawTextAt(10, ly + 17, anaLines[i], COL_TEXT, COL_PANEL);
+    }
+  }
+  drawBtn(3, SCREEN_H - 48, 150, 40, "重新分析", COL_ACCENT, 0xFFFF);
+  drawBtn(162, SCREEN_H - 48, 155, 40, "返回报文记录", COL_KEY_FN, COL_TEXT);
 }
 
 static void drawXiaozhiBody()
@@ -399,6 +683,15 @@ static void drawBody()
     break;
   case S_XIAOZHI:
     drawXiaozhiBody();
+    break;
+  case S_SERIAL:
+    drawSerialBody();
+    break;
+  case S_FRAMES:
+    drawFramesBody();
+    break;
+  case S_AIANA:
+    drawAnaBody();
     break;
   case S_CHAT:
     chatRender(CHAT_TOP, chatViewBot() - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
@@ -451,12 +744,12 @@ static void drawConnectingOverlay()
 
 static bool kbVisible()
 {
-  return scr == S_CHAT || scr == S_WIFIPASS || (scr == S_API && editField >= 0);
+  return scr == S_CHAT || scr == S_WIFIPASS || (scr == S_API && editField >= 0) || scr == S_SERIAL;
 }
 
 static bool inputLineVisible()
 {
-  return scr == S_CHAT || scr == S_WIFIPASS;
+  return scr == S_CHAT || scr == S_WIFIPASS || scr == S_SERIAL;
 }
 
 static void compose()
@@ -709,12 +1002,99 @@ static void handleDialogTouch(bool press, int x, int y)
   }
 }
 
+static void handleSerialTouch(bool press, bool release, bool down, int x, int y)
+{
+  if (press)
+  {
+    if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_HOME); return; }
+    if (ptIn(x, y, 3, 40, 100, 32)) { slSetMode(LINK_BLE); serialScroll = 0; dirtyFull = true; return; }
+    if (ptIn(x, y, 110, 40, 100, 32)) { slSetMode(LINK_TCP); serialScroll = 0; dirtyFull = true; return; }
+    if (ptIn(x, y, 217, 40, 100, 32)) { flClear(); serialScroll = 0; dirtyFull = true; showToast("记录已清空"); return; }
+    if (ptIn(x, y, 3, 122, 76, 32)) { flToggleHex(); dirtyFull = true; return; }
+    if (ptIn(x, y, 83, 122, 76, 32)) { serialEol = !serialEol; dirtyFull = true; return; }
+    if (ptIn(x, y, 163, 122, 76, 32)) { serialSend(); return; }
+    if (ptIn(x, y, 243, 122, 74, 32)) { framesScroll = 0; gotoScreen(S_FRAMES); return; }
+  }
+  int cb = chatViewBot();
+  if (down && !press && y >= TERM_TOP && y < cb)
+  {
+    if (!listDragging) { listDragging = true; dragStartY = y; scrollAtDragStart = serialScroll; }
+    int dy = y - dragStartY;
+    if (dy)
+    {
+      buildTermLines();
+      int viewH = cb - TERM_TOP - 6;
+      int maxScroll = max(0, (int)termLines.size() * LINE_H - viewH);
+      serialScroll = scrollAtDragStart + dy;
+      if (serialScroll < 0) serialScroll = 0;
+      if (serialScroll > maxScroll) serialScroll = maxScroll;
+      dirtyFull = true;
+    }
+  }
+  if (!down) listDragging = false;
+  uint8_t ev = kbHandle(down, x, y);
+  if (ev & KB_LAYOUT) { dirtyFull = true; return; }
+  if (ev & KB_CHANGED) dirtyInput = true;
+  if (ev & KB_SEND) serialSend();
+}
+
+static void handleFramesTouch(bool press, bool release, bool down, int x, int y)
+{
+  if (press && ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_SERIAL); return; }
+  if (down && y >= LIST_TOP)
+  {
+    if (!listDragging) { listDragging = true; dragStartY = y; scrollAtDragStart = framesScroll; }
+    int dy = y - dragStartY;
+    if (dy)
+    {
+      int viewH = SCREEN_H - 6 - LIST_TOP;
+      int maxScroll = max(0, (int)frames.size() * ITEM_H - viewH);
+      framesScroll = scrollAtDragStart - dy;
+      if (framesScroll < 0) framesScroll = 0;
+      if (framesScroll > maxScroll) framesScroll = maxScroll;
+      dirtyFull = true;
+    }
+  }
+  if (!down) listDragging = false;
+  if (release && movedDist < 10 && y >= LIST_TOP)
+  {
+    int idx = (y + framesScroll - LIST_TOP) / ITEM_H;
+    if (idx >= 0 && idx < (int)frames.size()) startAnalyze(idx);
+  }
+}
+
+static void handleAnaTouch(bool press, bool down, int x, int y)
+{
+  if (press)
+  {
+    if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_FRAMES); return; }
+    if (ptIn(x, y, 3, SCREEN_H - 48, 150, 40)) { startAnalyze(anaIdx); return; }
+    if (ptIn(x, y, 162, SCREEN_H - 48, 155, 40)) { gotoScreen(S_FRAMES); return; }
+  }
+  if (down && !press && y >= ANS_TOP && y < ANS_BOT)
+  {
+    if (!listDragging) { listDragging = true; dragStartY = y; scrollAtDragStart = anaScroll; }
+    int dy = y - dragStartY;
+    if (dy)
+    {
+      int viewH = ANS_BOT - ANS_TOP - 8;
+      int maxScroll = max(0, (int)anaLines.size() * LINE_H - viewH);
+      anaScroll = scrollAtDragStart - dy;
+      if (anaScroll < 0) anaScroll = 0;
+      if (anaScroll > maxScroll) anaScroll = maxScroll;
+      dirtyFull = true;
+    }
+  }
+  if (!down) listDragging = false;
+}
+
 static void handleHomeTouch(bool press, int x, int y)
 {
   if (!press) return;
-  if (ptIn(x, y, 12, 96, 88, 118)) { gotoScreen(S_CHAT); return; }
-  if (ptIn(x, y, 116, 96, 88, 118)) { gotoScreen(S_XIAOZHI); return; }
-  if (ptIn(x, y, 220, 96, 88, 118)) { gotoScreen(S_SETTINGS); return; }
+  if (ptIn(x, y, 6, 96, 72, 118)) { gotoScreen(S_CHAT); return; }
+  if (ptIn(x, y, 86, 96, 72, 118)) { serialScroll = 0; gotoScreen(S_SERIAL); return; }
+  if (ptIn(x, y, 166, 96, 72, 118)) { gotoScreen(S_XIAOZHI); return; }
+  if (ptIn(x, y, 246, 96, 72, 118)) { gotoScreen(S_SETTINGS); return; }
 }
 
 static void routeTouch(bool press, bool release, bool down, int x, int y)
@@ -727,6 +1107,9 @@ static void routeTouch(bool press, bool release, bool down, int x, int y)
     if (press && ptIn(x, y, 3, 4, 56, 28)) gotoScreen(S_HOME);
     break;
   case S_CHAT: handleChatTouch(press, release, down, x, y); break;
+  case S_SERIAL: handleSerialTouch(press, release, down, x, y); break;
+  case S_FRAMES: handleFramesTouch(press, release, down, x, y); break;
+  case S_AIANA: handleAnaTouch(press, down, x, y); break;
   case S_SETTINGS: handleSettingsTouch(press, x, y); break;
   case S_WIFI: handleWifiTouch(press, release, down, x, y); break;
   case S_WIFIPASS: handleWifiPassTouch(press, down, x, y); break;
@@ -743,6 +1126,8 @@ void setup()
   ui_init();
   touchInit();
   aiBegin();
+  flBegin();
+  slBegin("ESP32-S3-AI");
   kbAttach(&draft);
   kbSetSendLabel("发送");
 
@@ -801,6 +1186,22 @@ void loop()
   serviceAi();
   serviceScan();
   serviceWifiConnect();
+  slPoll();
+
+  if (frames.size() != lastFrameCount)
+  {
+    lastFrameCount = frames.size();
+    if (scr == S_SERIAL || scr == S_FRAMES) dirtyFull = true;
+  }
+  if (scr == S_SERIAL)
+  {
+    String st = slStatus();
+    if (st != lastSlStatus)
+    {
+      lastSlStatus = st;
+      dirtyFull = true;
+    }
+  }
 
   if (aiBusy() && scr == S_CHAT)
   {
