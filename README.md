@@ -44,10 +44,14 @@
 
 | 平台 | 设置 |
 |---|---|
-| Arduino IDE | Partition Scheme 选 **16M Flash (3MB APP/9.9MB FATFS)** |
-| PlatformIO | `board_build.partitions = app3M_fat9M_16MB.csv` |
+| Arduino IDE | 导入 `partitions/app3M_fat1M_8MB.csv` 后选它 |
+| PlatformIO | `board_build.partitions = partitions/app3M_fat1M_8MB.csv` |
 
-对应布局：app0 3MB @0x10000、app1 3MB @0x310000、otadata、FATFS 9.9MB、coredump 64KB。
+对应布局：app0 3MB @0x10000、app1 3MB @0x310000、ffat 1.75MB @0x610000、coredump 128KB @0x7D0000，**结束于 0x7F0000**。
+
+分区表尾地址刻意压在 **8MB 以内**：ESP-IDF 启动时按 bootloader 镜像头的 Flash Size 字段校验分区表，烧录工具若把镜像头写成 8MB（探测值或手动选项），超过 8MB 的分区表会被 `Failed to verify partition table` 拒绝并进入复位循环。本表在 8MB / 16MB 两种镜像头下都能通过校验。
+
+Arduino IDE 导入自定义分区表：把 `partitions/app3M_fat1M_8MB.csv` 复制到 sketchbook 的 `hardware/espressif/esp32/tools/partitions/` 目录，重启 IDE 后在 Partition Scheme 下拉里选择。
 
 ## 编译
 
@@ -63,7 +67,7 @@
 | PSRAM | OPI PSRAM |
 | Flash Size | 16MB |
 | Flash Mode | QIO 80MHz |
-| Partition Scheme | 16M Flash (3MB APP/9.9MB FATFS) |
+| Partition Scheme | 导入的 `app3M_fat1M_8MB` |
 | USB CDC On Boot | Enabled |
 
 5. 编译上传。卡在 `Connecting...` 时按住板上 BOOT 轻点 EN，或把 Upload Speed 降到 115200
@@ -74,7 +78,7 @@
 
 板型固定为 `esp32-s3-devkitc1-n16r8`（16MB Flash + 8MB Octal PSRAM），**不要改成不带 `-n16r8` 的通用板**，否则不会链接 OPI PSRAM 库，320×480 画布分配不到内存会反复重启。
 
-或用浏览器版工具：<https://espressif.github.io/esptool-js/> （Chrome/Edge + 数据线，选 ESP32-S3、921600、地址 0x0）。串口日志走原生 USB，打开串口助手即可看到 `[boot]` 阶段信息；若看不到，用 USB-TTL 接 GPIO43(TX)/GPIO44(RX)、115200。
+或用浏览器版工具：<https://espressif.github.io/esptool-js/> （Chrome/Edge + 数据线，选 ESP32-S3、921600、地址 0x0，Flash Size 填 16MB）。烧录前可用同一工具读芯片 ID 确认实际 Flash 容量。串口日志走原生 USB，打开串口助手即可看到 `[boot]` 阶段信息；若看不到，用 USB-TTL 接 GPIO43(TX)/GPIO44(RX)、115200。
 
 ## OTA 使用
 
