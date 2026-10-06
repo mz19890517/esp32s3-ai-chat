@@ -80,6 +80,18 @@ Arduino IDE 导入自定义分区表：把 `partitions/app3M_fat1M_8MB.csv` 复�
 
 或用浏览器版工具：<https://espressif.github.io/esptool-js/> （Chrome/Edge + 数据线，选 ESP32-S3、921600、地址 0x0，Flash Size 填 16MB）。烧录前可用同一工具读芯片 ID 确认实际 Flash 容量。串口日志走原生 USB，打开串口助手即可看到 `[boot]` 阶段信息；若看不到，用 USB-TTL 接 GPIO43(TX)/GPIO44(RX)、115200。
 
+## 抓开机日志
+
+复位循环时原生 USB 口会反复枚举，串口助手里表现为端口不断出现又消失，手动抓不到。用 `tools/capture_log.py` 自动重连：
+
+```bash
+pip install pyserial
+python tools/capture_log.py            # 自动识别 ESP32-S3 串口
+python tools/capture_log.py COM5       # 指定串口
+```
+
+脚本会在端口断开后不断重试，日志追加写入 `esp_boot.log`（同时回显到终端），`CONNECT`/`DISCONNECT` 标记之间就是一次启动的完整输出。抓到后把 `esp_boot.log` 内容发出来即可。跑之前先关掉浏览器里占用串口的连接。
+
 ## OTA 使用
 
 **方式 A：ArduinoOTA 推送（电脑执行）**
