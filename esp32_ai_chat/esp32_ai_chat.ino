@@ -10,8 +10,9 @@
 #include "ai_client.h"
 #include "frame_log.h"
 #include "serial_link.h"
+#include "ota_update.h"
 
-enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI, S_SERIAL, S_FRAMES, S_AIANA };
+enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI, S_SERIAL, S_FRAMES, S_AIANA, S_OTA, S_OTAURL };
 static Screen scr = S_CHAT;
 
 static bool dirtyFull = true;
@@ -75,6 +76,11 @@ static bool anaWorking = false;
 static String anaErr;
 static std::vector<String> anaLines;
 static uint8_t aiOwner = 0;
+static uint8_t lastOtaPhase = 0xFF;
+static uint8_t lastOtaState = 0xFF;
+static int lastOtaPct = -1;
+
+static String otaUrl;
 
 static const char *AI_SYS_ANALYZE = "你是一位嵌入式通信协议分析专家，精通 BLE、串口、AT 指令和各类 IoT 设备协议解析。用简洁准确的中文回答，尽量给出字节级别的解释，不要编造不存在的协议。";
 
@@ -206,6 +212,7 @@ static void startAnalyze(int idx)
 {
   if (idx < 0 || idx >= (int)frames.size()) { showToast("报文已过期"); return; }
   if (!wifiUp()) { showToast("未联网，请先在设置中配置 WiFi"); return; }
+  if (otaBusy()) { showToast("固件升级中，请稍候"); return; }
   if (aiBusy()) { showToast("AI 正在回复，请稍候"); return; }
   FrameRec f = frames[idx];
   String p = "请分析这条串口报文。\n";
@@ -311,6 +318,7 @@ static void sendToAi()
   text.trim();
   if (!text.length()) return;
   if (!wifiUp()) { showToast("未联网，请先在设置中配置 WiFi"); return; }
+  if (otaBusy()) { showToast("固件升级中，请稍候"); return; }
   if (aiBusy()) { showToast("AI 正在回复，请稍候"); return; }
   kbTake();
   chatAdd(true, text);
@@ -395,6 +403,8 @@ const char *t = (scr == S_SETTINGS) ? "设置" : (scr == S_WIFI) ? "WiFi 设置"
                                      : (scr == S_SERIAL)          ? "串口助手"
                                      : (scr == S_FRAMES)          ? "报文记录"
                                      : (scr == S_AIANA)           ? "AI 报文分析"
+                                     : (scr == S_OTA)             ? "固件升级"
+                                     : (scr == S_OTAURL)          ? "升级地址"
                                                                    : "API 设置";
     drawTextAt(70, centerBaseY(0, TITLE_H), t, COL_TEXT, COL_PANEL);
   }
@@ -403,20 +413,83 @@ const char *t = (scr == S_SETTINGS) ? "设置" : (scr == S_WIFI) ? "WiFi 设置"
 static void drawSettingsBody()
 {
   struct Row { int y; const char *label; };
-  Row rows[5] = {
-    {44, "WiFi 设置"},
-    {104, "AI 接口设置"},
-    {164, "清除聊天记录"},
-    {224, "重启设备"},
-    {284, "返回聊天"},
+  Row rows[6] = {
+    {42, "WiFi 设置"},
+    {110, "AI 接口设置"},
+    {178, "固件升级 (OTA)"},
+    {246, "清除聊天记录"},
+    {314, "重启设备"},
+    {382, "返回聊天"},
   };
   for (auto &r : rows)
   {
-    gfx->fillRoundRect(3, r.y, 314, 48, 8, COL_PANEL);
-    drawTextAt(14, r.y + 19, r.label, COL_TEXT, COL_PANEL);
-    drawTextAt(296, r.y + 19, ">", COL_SUB, COL_PANEL);
+    gfx->fillRoundRect(3, r.y, 314, 58, 8, COL_PANEL);
+    drawTextAt(14, r.y + 21, r.label, COL_TEXT, COL_PANEL);
+    drawTextAt(296, r.y + 21, ">", COL_SUB, COL_PANEL);
   }
-  drawTextAt(14, 344, "触摸 AI 助手 v1.1", COL_SUB, COL_BG);
+  drawTextAt(14, 462, "固件 " FW_VERSION, COL_SUB, COL_BG);
+}
+
+static void drawProgress(int x, int y, int w, int h, int p)
+{
+  gfx->drawRoundRect(x, y, w, h, h / 2, COL_LINE);
+  int fw = (int)((long)(w - 4) * p / 100);
+  if (fw > 0)
+  {
+    gfx->fillRoundRect(x + 2, y + 2, fw, h - 4, (h - 4) / 2, COL_ACCENT);
+  }
+}
+
+static void drawOtaBody()
+{
+  gfx->fillRoundRect(3, 42, 314, 96, 8, COL_PANEL);
+  drawTextAt(12, 62, "固件版本", COL_SUB, COL_PANEL);
+  drawTextAt(96, 62, fitTail(otaVersion(), 212), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 86, "运行槽位", COL_SUB, COL_PANEL);
+  drawTextAt(96, 86, otaSlot(), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 110, "空闲分区", COL_SUB, COL_PANEL);
+  drawTextAt(96, 110, otaFreeSpace(), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 130, fitTail("空闲内存 " + String(ESP.getFreeHeap() / 1024) + " KB", 290), COL_SUB, COL_PANEL);
+
+  OtaState s = otaState();
+  gfx->fillRoundRect(3, 146, 314, 96, 8, COL_PANEL);
+  drawTextAt(12, 166, "网络推送 OTA", COL_TEXT, COL_PANEL);
+  String hint = otaArmed() ? "已开启，电脑同网内可推送" : "已关闭";
+  drawTextAt(240, 166, otaArmed() ? "开启" : "关闭", otaArmed() ? COL_OK : COL_SUB, COL_PANEL);
+  String m = otaMessage().length() ? otaMessage() : (s == OTA_IDLE ? hint : String("空闲"));
+  if (s == OTA_IDLE) m = hint;
+  uint16_t c = (s == OTA_FAIL) ? COL_ERR_TX : (s == OTA_DONE ? COL_OK : (s == OTA_RUNNING ? COL_ACCENT : COL_SUB));
+  drawTextAt(12, 194, fitTail(m, 296), c, COL_PANEL);
+  if (s == OTA_RUNNING)
+  {
+    drawProgress(12, 206, 296, 14, otaPercent());
+    drawTextAt(12, 236, String(otaPercent()) + "%", COL_SUB, COL_PANEL);
+  }
+
+  gfx->fillRoundRect(3, 250, 314, 78, 8, COL_PANEL);
+  drawTextAt(12, 270, "URL 固件升级", COL_TEXT, COL_PANEL);
+  drawTextAt(12, 294, fitTail(otaUrl.length() ? otaUrl : String("例 http://192.168.1.5:8000/firmware.bin"), 296),
+             otaUrl.length() ? COL_TEXT : COL_SUB, COL_PANEL);
+  drawTextAt(12, 318, fitTail("电脑开 HTTP 服务器提供 firmware.bin", 296), COL_SUB, COL_PANEL);
+
+  drawBtn(3, 338, 154, 44, otaArmed() ? "关闭推送" : "开启推送", otaArmed() ? COL_KEY_FN : COL_ACCENT, 0xFFFF);
+  drawBtn(163, 338, 154, 44, "设置地址", COL_KEY_FN, COL_TEXT);
+  drawBtn(3, 390, 314, 44, "开始 URL 升级", COL_ACCENT, 0xFFFF);
+  drawTextAt(14, 458, "推送端：电脑运行 arduinoOTA 或 Arduino IDE 导出程序", COL_SUB, COL_BG);
+}
+
+static void drawOtaUrlBody()
+{
+  drawTextAt(14, 58, "填写 firmware.bin 的下载地址", COL_SUB, COL_BG);
+  gfx->fillRoundRect(3, 70, 314, 40, 8, COL_PANEL);
+  String v = otaUrl;
+  v += ((millis() / 500) & 1) ? "_" : "";
+  drawTextAt(12, centerBaseY(70, 40), fitTail(v, 290), COL_TEXT, COL_PANEL);
+  drawTextAt(14, 136, "本机 IP: " + slLocalIp(), COL_SUB, COL_BG);
+  drawTextAt(14, 164, "电脑上执行 python -m http.server 8000", COL_SUB, COL_BG);
+  drawTextAt(14, 188, "再把电脑 IP 和端口填到上面", COL_SUB, COL_BG);
+  drawBtn(3, 246, 100, 44, "取消", COL_KEY_FN, COL_TEXT);
+  drawBtn(217, 246, 100, 44, "保存", COL_ACCENT, 0xFFFF);
 }
 
 static void drawRssi(int x, int y, int rssi)
@@ -693,6 +766,12 @@ static void drawBody()
   case S_AIANA:
     drawAnaBody();
     break;
+  case S_OTA:
+    drawOtaBody();
+    break;
+  case S_OTAURL:
+    drawOtaUrlBody();
+    break;
   case S_CHAT:
     chatRender(CHAT_TOP, chatViewBot() - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
     break;
@@ -744,12 +823,12 @@ static void drawConnectingOverlay()
 
 static bool kbVisible()
 {
-  return scr == S_CHAT || scr == S_WIFIPASS || (scr == S_API && editField >= 0) || scr == S_SERIAL;
+  return scr == S_CHAT || scr == S_WIFIPASS || (scr == S_API && editField >= 0) || scr == S_SERIAL || scr == S_OTAURL;
 }
 
 static bool inputLineVisible()
 {
-  return scr == S_CHAT || scr == S_WIFIPASS || scr == S_SERIAL;
+  return scr == S_CHAT || scr == S_WIFIPASS || scr == S_SERIAL || scr == S_OTAURL;
 }
 
 static void compose()
@@ -855,17 +934,18 @@ static void handleSettingsTouch(bool press, int x, int y)
 {
   if (!press) return;
   if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_HOME); return; }
-  if (ptIn(x, y, 3, 44, 314, 48)) { scanStart(); gotoScreen(S_WIFI); return; }
-  if (ptIn(x, y, 3, 104, 314, 48)) { gotoScreen(S_API); return; }
-  if (ptIn(x, y, 3, 164, 314, 48)) { dlgClear = true; dirtyFull = true; return; }
-  if (ptIn(x, y, 3, 224, 314, 48))
+  if (ptIn(x, y, 3, 42, 314, 58)) { scanStart(); gotoScreen(S_WIFI); return; }
+  if (ptIn(x, y, 3, 110, 314, 58)) { gotoScreen(S_API); return; }
+  if (ptIn(x, y, 3, 178, 314, 58)) { gotoScreen(S_OTA); return; }
+  if (ptIn(x, y, 3, 246, 314, 58)) { dlgClear = true; dirtyFull = true; return; }
+  if (ptIn(x, y, 3, 314, 314, 58))
   {
     showToast("正在重启...");
     gfx->flush();
     delay(500);
     ESP.restart();
   }
-  if (ptIn(x, y, 3, 284, 314, 48)) { gotoScreen(S_CHAT); }
+  if (ptIn(x, y, 3, 382, 314, 58)) { gotoScreen(S_CHAT); }
 }
 
 static void handleWifiTouch(bool press, bool release, bool down, int x, int y)
@@ -1088,6 +1168,92 @@ static void handleAnaTouch(bool press, bool down, int x, int y)
   if (!down) listDragging = false;
 }
 
+static void handleOtaTouch(bool press, bool down, int x, int y)
+{
+  if (press)
+  {
+    if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_SETTINGS); return; }
+    if (ptIn(x, y, 3, 338, 154, 44))
+    {
+      otaSetArmed(!otaArmed());
+      showToast(otaArmed() ? "已开启推送接收" : "已关闭推送接收");
+      dirtyFull = true;
+      return;
+    }
+    if (ptIn(x, y, 163, 338, 154, 44))
+    {
+      kbAttach(&otaUrl);
+      kbSetMask(false);
+      kbSetSendLabel("保存");
+      kbReset();
+      gotoScreen(S_OTAURL);
+      return;
+    }
+    if (ptIn(x, y, 3, 390, 314, 44))
+    {
+      if (otaBusy()) { showToast("升级进行中"); return; }
+      if (!wifiUp()) { showToast("未联网，请先配置 WiFi"); return; }
+      if (otaWebStart(otaUrl))
+      {
+        showToast("已开始升级", 1200);
+        dirtyFull = true;
+      }
+      else
+      {
+        showToast(otaMessage().length() ? otaMessage() : "无法开始升级", 2600);
+        dirtyFull = true;
+      }
+      return;
+    }
+  }
+  if (otaBusy() && otaState() == OTA_RUNNING)
+  {
+    uint8_t ph = (millis() / 450) % 3;
+    if (ph != lastOtaPhase) { lastOtaPhase = ph; dirtyFull = true; }
+  }
+}
+
+static void handleOtaUrlTouch(bool press, bool down, int x, int y)
+{
+  if (press)
+  {
+    if (ptIn(x, y, 3, 4, 56, 28))
+    {
+      kbAttach(&draft);
+      kbSetSendLabel("发送");
+      gotoScreen(S_OTA);
+      return;
+    }
+    if (ptIn(x, y, 3, 246, 100, 44))
+    {
+      kbAttach(&draft);
+      kbSetSendLabel("发送");
+      gotoScreen(S_OTA);
+      return;
+    }
+    if (ptIn(x, y, 217, 246, 100, 44))
+    {
+      otaUrl.trim();
+      kbAttach(&draft);
+      kbSetSendLabel("发送");
+      gotoScreen(S_OTA);
+      showToast("地址已保存");
+      return;
+    }
+  }
+  uint8_t ev = kbHandle(down, x, y);
+  if (ev & KB_LAYOUT) { dirtyFull = true; return; }
+  if (ev & KB_CHANGED) dirtyFull = true;
+  if (ev & KB_SEND)
+  {
+    otaUrl.trim();
+    kbAttach(&draft);
+    kbSetSendLabel("发送");
+    gotoScreen(S_OTA);
+    showToast("地址已保存");
+  }
+}
+
 static void handleHomeTouch(bool press, int x, int y)
 {
   if (!press) return;
@@ -1110,6 +1276,8 @@ static void routeTouch(bool press, bool release, bool down, int x, int y)
   case S_SERIAL: handleSerialTouch(press, release, down, x, y); break;
   case S_FRAMES: handleFramesTouch(press, release, down, x, y); break;
   case S_AIANA: handleAnaTouch(press, down, x, y); break;
+  case S_OTA: handleOtaTouch(press, down, x, y); break;
+  case S_OTAURL: handleOtaUrlTouch(press, down, x, y); break;
   case S_SETTINGS: handleSettingsTouch(press, x, y); break;
   case S_WIFI: handleWifiTouch(press, release, down, x, y); break;
   case S_WIFIPASS: handleWifiPassTouch(press, down, x, y); break;
@@ -1128,6 +1296,7 @@ void setup()
   aiBegin();
   flBegin();
   slBegin("ESP32-S3-AI");
+  otaBegin();
   kbAttach(&draft);
   kbSetSendLabel("发送");
 
@@ -1187,6 +1356,16 @@ void loop()
   serviceScan();
   serviceWifiConnect();
   slPoll();
+  otaPoll();
+
+  uint8_t os = (uint8_t)otaState();
+  int op = otaPercent();
+  if (os != lastOtaState || op != lastOtaPct)
+  {
+    lastOtaState = os;
+    lastOtaPct = op;
+    if (scr == S_OTA) dirtyFull = true;
+  }
 
   if (frames.size() != lastFrameCount)
   {

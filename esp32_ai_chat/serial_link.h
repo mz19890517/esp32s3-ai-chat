@@ -14,3 +14,5 @@ void slToggleMode();
 String slStatus();
 bool slSend(const String &s);
 String slLocalIp();
+void slOtaSuspend();
+void slOtaResume();

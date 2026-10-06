@@ -32,6 +32,7 @@ static WiFiClient tcpCli;
 static bool tcpListening = false;
 static LinkMode mode = LINK_BLE;
 static char devName[24] = "ESP32-AI";
+static bool bleReady = false;
 
 class RxCb : public BLECharacteristicCallbacks
 {
@@ -72,6 +73,7 @@ void slBegin(const char *name)
   rxChar->setCallbacks(new RxCb());
   svc->start();
   BLEDevice::startAdvertising();
+  bleReady = true;
 
   tcpSrv = new WiFiServer(SL_TCP_PORT);
   tcpSrv->setNoDelay(true);
@@ -115,6 +117,18 @@ bool slSend(const String &s)
   }
   if (!tcpCli.connected()) return false;
   return tcpCli.write(d, n) == n;
+}
+
+void slOtaSuspend()
+{
+  if (!bleReady) return;
+  BLEDevice::stopAdvertising();
+}
+
+void slOtaResume()
+{
+  if (!bleReady) return;
+  BLEDevice::startAdvertising();
 }
 
 void slPoll()
