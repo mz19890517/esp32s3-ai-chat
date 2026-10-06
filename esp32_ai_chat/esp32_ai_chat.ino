@@ -1291,12 +1291,16 @@ void setup()
   delay(300);
   Serial.println("\n[boot] setup enter");
   cfgLoad();
+  Serial.println("[boot] stage: cfg ok");
   ui_init();
+  Serial.println("[boot] stage: ui ok");
   touchInit();
   aiBegin();
   flBegin();
+  Serial.println("[boot] stage: ai ok");
   slBegin("ESP32-S3-AI");
   otaBegin();
+  Serial.println("[boot] stage: ble ota ok");
   kbAttach(&draft);
   kbSetSendLabel("发送");
 

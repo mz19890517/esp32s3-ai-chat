@@ -72,13 +72,9 @@
 
 仓库根目录已带 `platformio.ini`，本地 `pio run` 或推送后由 GitHub Actions 自动编译，在 Actions 页面下载 `firmware-bin` 构件，内含 `firmware.bin`（纯应用分区，用于 OTA）和 `merged_flash.bin`（bootloader + 分区表 + 应用，单文件刷入用）。
 
-### 烧录 merged_flash.bin（免 IDE）
+板型固定为 `esp32-s3-devkitc1-n16r8`（16MB Flash + 8MB Octal PSRAM），**不要改成不带 `-n16r8` 的通用板**，否则不会链接 OPI PSRAM 库，320×480 画布分配不到内存会反复重启。
 
-```
-esptool --chip esp32s3 --port COMx --baud 921600 write_flash 0x0 merged_flash.bin
-```
-
-或用浏览器版工具：<https://espressif.github.io/esptool-js/> （Chrome/Edge + 数据线，选 ESP32-S3、921600、地址 0x0）。
+或用浏览器版工具：<https://espressif.github.io/esptool-js/> （Chrome/Edge + 数据线，选 ESP32-S3、921600、地址 0x0）。串口日志走原生 USB，打开串口助手即可看到 `[boot]` 阶段信息；若看不到，用 USB-TTL 接 GPIO43(TX)/GPIO44(RX)、115200。
 
 ## OTA 使用
 

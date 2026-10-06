@@ -75,7 +75,13 @@ void ui_init()
 
   gfx = new Arduino_Canvas(SCREEN_W, SCREEN_H, &lcdPanel, 0, 0, 0);
   bool bok = gfx->begin();
-  Serial.printf("[boot] gfx begin=%d\n", (int)bok);
+  Serial.printf("[boot] gfx begin=%d psram=%u heap=%u\n", (int)bok, (unsigned)ESP.getFreePsram(),
+                (unsigned)ESP.getFreeHeap());
+  if (!bok)
+  {
+    Serial.println("[boot] FATAL: gfx begin failed");
+    while (true) delay(1000);
+  }
   gfx->fillScreen(COL_BG);
   gfx->setTextSize(1);
   gfx->setFont(AI_FONT);
