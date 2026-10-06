@@ -3,7 +3,7 @@
 
 #define FW_VERSION "1.2.0"
 
-enum OtaState : uint8_t { OTA_IDLE, OTA_RUNNING, OTA_DONE, OTA_FAIL };
+enum OtaState : uint8_t { OST_IDLE, OST_RUNNING, OST_DONE, OST_FAIL };
 
 void otaBegin();
 void otaPoll();

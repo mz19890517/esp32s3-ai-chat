@@ -3,17 +3,16 @@
 #include <ArduinoOTA.h>
 #include <Update.h>
 #include <HTTPClient.h>
+#include <WiFi.h>
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include <esp_ota_ops.h>
-#include <esp_app_desc.h>
-#include <esp_app_format.h>
 #include <esp_partition.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
 
-static OtaState st = OTA_IDLE;
+static OtaState st = OST_IDLE;
 static volatile int pct = 0;
 static String msg;
 static SemaphoreHandle_t mtx;
@@ -59,13 +58,13 @@ String otaMessage()
 bool otaArmed() { return armed; }
 void otaSetArmed(bool a) { armed = a; }
 
-bool otaBusy() { return otaState() == OTA_RUNNING; }
+bool otaBusy() { return otaState() == OST_RUNNING; }
 bool otaRestartPending() { return restartPending; }
 
 String otaVersion()
 {
   String v = String(FW_VERSION);
-  const esp_app_desc_t *d = esp_app_desc_get();
+  const esp_app_desc_t *d = esp_ota_get_app_description();
   if (d && d->version) v += String("  ") + d->version;
   return v;
 }
@@ -92,7 +91,7 @@ String otaFreeSpace()
 static void webFail(const String &m)
 {
   Update.abort();
-  setState(OTA_FAIL, m);
+  setState(OST_FAIL, m);
   webBusy = false;
   slOtaResume();
 }
@@ -105,7 +104,7 @@ static void webTask(void *)
   xSemaphoreGive(mtx);
 
   slOtaSuspend();
-  setState(OTA_RUNNING, "连接升级服务器", 0);
+  setState(OST_RUNNING, "连接升级服务器", 0);
 
   WiFiClientSecure scl;
   WiFiClient pcl;
@@ -189,24 +188,25 @@ static void webTask(void *)
     return;
   }
 
-  setState(OTA_DONE, "升级完成，即将重启", 100);
+  setState(OST_DONE, "升级完成，即将重启", 100);
   webBusy = false;
   restartPending = true;
   vTaskDelete(nullptr);
 }
 
-bool otaWebStart(const String &url)
+bool otaWebStart(const String &urlIn)
 {
   if (webBusy || otaBusy()) return false;
   if (ESP.getFreeHeap() < 60000)
   {
-    setState(OTA_FAIL, "可用内存不足，请重启后重试");
+    setState(OST_FAIL, "可用内存不足，请重启后重试");
     return false;
   }
+  String url = urlIn;
   url.trim();
   if (!url.startsWith("http://") && !url.startsWith("https://"))
   {
-    setState(OTA_FAIL, "地址需以 http:// 或 https:// 开头");
+    setState(OST_FAIL, "地址需以 http:// 或 https:// 开头");
     return false;
   }
   webUrlTmp = url;
@@ -214,7 +214,7 @@ bool otaWebStart(const String &url)
   if (xTaskCreate(webTask, "otaweb", 16384, nullptr, 2, &webTaskHandle) != pdPASS)
   {
     webBusy = false;
-    setState(OTA_FAIL, "无法启动升级任务");
+    setState(OST_FAIL, "无法启动升级任务");
     return false;
   }
   return true;
@@ -223,7 +223,7 @@ bool otaWebStart(const String &url)
 static void onStart()
 {
   slOtaSuspend();
-  setState(OTA_RUNNING, "已连接推送端，接收固件", 0);
+  setState(OST_RUNNING, "已连接推送端，接收固件", 0);
 }
 
 static void onProgress(unsigned cur, unsigned total)
@@ -234,19 +234,18 @@ static void onProgress(unsigned cur, unsigned total)
   if (mtx) xSemaphoreGive(mtx);
 }
 
-static void onEnd(bool ok)
+static void onEndOk()
 {
-  if (ok)
-  {
-    setState(OTA_DONE, "升级完成，即将重启", 100);
-    restartPending = true;
-    restartAt = millis() + 1500;
-  }
-  else
-  {
-    setState(OTA_FAIL, "推送升级失败");
-    slOtaResume();
-  }
+  setState(OST_DONE, "升级完成，即将重启", 100);
+  restartPending = true;
+  restartAt = millis() + 1500;
+}
+
+static void onError(ota_error_t e)
+{
+  String m = "推送升级失败，错误码 " + String((int)e);
+  setState(OST_FAIL, m);
+  slOtaResume();
 }
 
 void otaBegin()
@@ -255,7 +254,8 @@ void otaBegin()
   ArduinoOTA.setHostname("ESP32-AI-S3");
   ArduinoOTA.onStart(onStart);
   ArduinoOTA.onProgress(onProgress);
-  ArduinoOTA.onEnd(onEnd);
+  ArduinoOTA.onEnd(onEndOk);
+  ArduinoOTA.onError(onError);
   ArduinoOTA.begin();
 }
 

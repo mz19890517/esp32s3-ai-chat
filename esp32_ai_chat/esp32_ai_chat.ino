@@ -456,11 +456,11 @@ static void drawOtaBody()
   drawTextAt(12, 166, "网络推送 OTA", COL_TEXT, COL_PANEL);
   String hint = otaArmed() ? "已开启，电脑同网内可推送" : "已关闭";
   drawTextAt(240, 166, otaArmed() ? "开启" : "关闭", otaArmed() ? COL_OK : COL_SUB, COL_PANEL);
-  String m = otaMessage().length() ? otaMessage() : (s == OTA_IDLE ? hint : String("空闲"));
-  if (s == OTA_IDLE) m = hint;
-  uint16_t c = (s == OTA_FAIL) ? COL_ERR_TX : (s == OTA_DONE ? COL_OK : (s == OTA_RUNNING ? COL_ACCENT : COL_SUB));
+  String m = otaMessage().length() ? otaMessage() : (s == OST_IDLE ? hint : String("空闲"));
+  if (s == OST_IDLE) m = hint;
+  uint16_t c = (s == OST_FAIL) ? COL_ERR_TX : (s == OST_DONE ? COL_OK : (s == OST_RUNNING ? COL_ACCENT : COL_SUB));
   drawTextAt(12, 194, fitTail(m, 296), c, COL_PANEL);
-  if (s == OTA_RUNNING)
+  if (s == OST_RUNNING)
   {
     drawProgress(12, 206, 296, 14, otaPercent());
     drawTextAt(12, 236, String(otaPercent()) + "%", COL_SUB, COL_PANEL);
@@ -1206,7 +1206,7 @@ static void handleOtaTouch(bool press, bool down, int x, int y)
       return;
     }
   }
-  if (otaBusy() && otaState() == OTA_RUNNING)
+  if (otaBusy() && otaState() == OST_RUNNING)
   {
     uint8_t ph = (millis() / 450) % 3;
     if (ph != lastOtaPhase) { lastOtaPhase = ph; dirtyFull = true; }
