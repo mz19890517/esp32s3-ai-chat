@@ -37,6 +37,13 @@ extern Arduino_Canvas *gfx;
 
 void ui_init();
 
+#define BOOTLOG(fmt, ...)                \
+  do                                     \
+  {                                      \
+    Serial.printf(fmt, ##__VA_ARGS__);   \
+    Serial0.printf(fmt, ##__VA_ARGS__);  \
+  } while (0)
+
 int textWidth(const char *s);
 int textWidth(const String &s);
 int utf8Count(const String &s);

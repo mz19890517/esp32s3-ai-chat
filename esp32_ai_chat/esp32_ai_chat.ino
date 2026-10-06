@@ -1287,20 +1287,21 @@ static void routeTouch(bool press, bool release, bool down, int x, int y)
 
 void setup()
 {
+  Serial0.begin(115200);
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n[boot] setup enter");
+  BOOTLOG("\n[boot] setup enter\n");
   cfgLoad();
-  Serial.println("[boot] stage: cfg ok");
+  BOOTLOG("[boot] stage: cfg ok\n");
   ui_init();
-  Serial.println("[boot] stage: ui ok");
+  BOOTLOG("[boot] stage: ui ok\n");
   touchInit();
   aiBegin();
   flBegin();
-  Serial.println("[boot] stage: ai ok");
+  BOOTLOG("[boot] stage: ai ok\n");
   slBegin("ESP32-S3-AI");
   otaBegin();
-  Serial.println("[boot] stage: ble ota ok");
+  BOOTLOG("[boot] stage: ble ota ok\n");
   kbAttach(&draft);
   kbSetSendLabel("发送");
 

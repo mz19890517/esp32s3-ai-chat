@@ -45,13 +45,15 @@ static uint8_t tcaRd(uint8_t reg)
 
 void ui_init()
 {
+  Serial0.begin(115200);
   Serial.begin(115200);
   delay(300);
-  Serial.println("\n[boot] ui_init start");
-  Serial.printf("[boot] PSRAM size=%u\n", ESP.getPsramSize());
+  BOOTLOG("\n[boot] ui_init start\n");
+  BOOTLOG("[boot] PSRAM size=%u\n", (unsigned)ESP.getPsramSize());
+  BOOTLOG("[boot] chip rev=%d cores=%d\n", (int)ESP.getChipRevision(), (int)ESP.getChipCores());
   pinMode(PIN_LCD_BL, OUTPUT);
   digitalWrite(PIN_LCD_BL, HIGH);
-  Serial.println("[boot] backlight ON");
+  BOOTLOG("[boot] backlight ON\n");
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   Wire.setClock(400000);
   Wire.setTimeOut(50);
@@ -65,7 +67,7 @@ void ui_init()
   uint8_t cfg = tcaRd(TCA_REG_CFG) & ~TCA_BIT_RST;
   tcaWr(TCA_REG_CFG, cfg);
   uint8_t out = tcaRd(TCA_REG_OUT);
-  Serial.printf("[boot] TCA cfg=0x%02X out=0x%02X\n", cfg, out);
+  BOOTLOG("[boot] TCA cfg=0x%02X out=0x%02X\n", cfg, out);
   tcaWr(TCA_REG_OUT, out | TCA_BIT_RST);
   delay(10);
   tcaWr(TCA_REG_OUT, out & ~TCA_BIT_RST);
@@ -75,11 +77,11 @@ void ui_init()
 
   gfx = new Arduino_Canvas(SCREEN_W, SCREEN_H, &lcdPanel, 0, 0, 0);
   bool bok = gfx->begin();
-  Serial.printf("[boot] gfx begin=%d psram=%u heap=%u\n", (int)bok, (unsigned)ESP.getFreePsram(),
-                (unsigned)ESP.getFreeHeap());
+  BOOTLOG("[boot] gfx begin=%d psram=%u heap=%u\n", (int)bok, (unsigned)ESP.getFreePsram(),
+          (unsigned)ESP.getFreeHeap());
   if (!bok)
   {
-    Serial.println("[boot] FATAL: gfx begin failed");
+    BOOTLOG("[boot] FATAL: gfx begin failed\n");
     while (true) delay(1000);
   }
   gfx->fillScreen(COL_BG);
@@ -88,7 +90,7 @@ void ui_init()
   gfx->setUTF8Print(true);
 
   gfx->flush();
-  Serial.println("[boot] ui_init done");
+  BOOTLOG("[boot] ui_init done\n");
 }
 
 int textWidth(const char *s)
