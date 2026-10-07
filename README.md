@@ -136,3 +136,21 @@ python -m http.server 8000
 ## License
 
 [MIT](LICENSE)
+
+<!-- omgithub:readme:start -->
+## 🚀 Build, play, and remix with OMGithub
+
+**Remixed using [OMGithub.com](https://omgithub.com).**
+
+[![OMGithub](https://img.shields.io/badge/OMGithub-Open%20project-orange?style=for-the-badge)](https://omgithub.com/mz19890517/esp32s3-ai-chat)
+[![GitHub](https://img.shields.io/badge/GitHub-Source-181717?logo=github&style=for-the-badge)](https://github.com/mz19890517/esp32s3-ai-chat)
+
+- 🎮 [Open the project](https://omgithub.com/mz19890517/esp32s3-ai-chat).
+- ✨ [Remix this project](https://omgithub.com/?remix=mz19890517%2Fesp32s3-ai-chat).
+- 💻 [Explore the source](https://github.com/mz19890517/esp32s3-ai-chat).
+- 🛠️ [Check build runs](https://github.com/mz19890517/esp32s3-ai-chat/actions).
+- 🐛 [Report an issue](https://github.com/mz19890517/esp32s3-ai-chat/issues).
+- 👤 [Explore the creator's projects](https://omgithub.com/mz19890517).
+- 🌍 [Create with OMGithub](https://omgithub.com).
+- 🧬 [Explore the remix source](https://github.com/mz19890517/esp32s3-ai-chat).
+<!-- omgithub:readme:end -->
