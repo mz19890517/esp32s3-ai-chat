@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+/usr/bin/time -p pwd
+PORT="${PORT:-3000}"
+export PORT
+PROJECT_ROOT="$(pwd)"
+DIST_DIR="$PROJECT_ROOT/dist"
+WEB_DIR="${OPENCODE_WEB_DIR:-/home/runner/work/_temp/omgithub-web}"
+FALLBACK_WEB_DIR="/home/runner/work/_temp/omgithub-web"
+/usr/bin/time -p mkdir -p "$DIST_DIR"
+/usr/bin/time -p mkdir -p "$WEB_DIR"
+/usr/bin/time -p mkdir -p "$FALLBACK_WEB_DIR"
+/usr/bin/time -p tee "$DIST_DIR/index.html" > /dev/null <<'HTML_EOF'
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32-S3 触摸屏 AI 聊天固件</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;background:#0b1020;color:#e8ecf4;line-height:1.6}
+a{color:#5aa9ff;text-decoration:none}
+.wrap{max-width:1080px;margin:0 auto;padding:0 20px}
+header.top{position:sticky;top:0;z-index:10;background:rgba(11,16,32,.92);backdrop-filter:blur(8px);border-bottom:1px solid #1e2a4a}
+header.top .wrap{display:flex;align-items:center;gap:12px;height:60px}
+.logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#2f7bff,#7c3aed);display:flex;align-items:center;justify-content:center;font-weight:800;color:#fff}
+.badge{font-size:12px;border:1px solid #2b3c66;border-radius:999px;padding:2px 10px;color:#9db4dd}
+.hero{padding:48px 0 24px}
+.hero-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:28px;align-items:center}
+@media(max-width:820px){.hero-grid{grid-template-columns:1fr}}
+h1{font-size:34px;line-height:1.3;margin:12px 0}
+@media(max-width:820px){h1{font-size:26px}}
+.sub{color:#9db4dd;font-size:15px}
+.cta{margin-top:18px;display:flex;gap:10px;flex-wrap:wrap}
+.btn{display:inline-block;padding:10px 18px;border-radius:10px;font-weight:600;font-size:14px}
+.btn.primary{background:#2f7bff;color:#fff}
+.btn.ghost{border:1px solid #2b3c66;color:#cfe0ff}
+.device{width:230px;height:400px;margin:0 auto;background:#05070f;border:2px solid #2b3c66;border-radius:26px;padding:12px;box-shadow:0 20px 60px rgba(47,123,255,.25)}
+.screen{background:#101a33;border-radius:14px;height:100%;overflow:hidden;display:flex;flex-direction:column}
+.screen-bar{background:#1a2547;color:#fff;font-size:13px;padding:8px 12px;display:flex;justify-content:space-between;align-items:center}
+.dot{width:8px;height:8px;border-radius:50%;background:#22c55e;display:inline-block;margin-right:6px}
+.bubble{margin:8px 10px;padding:8px 10px;border-radius:12px;font-size:12px;max-width:85%}
+.bubble.user{background:#2f7bff;color:#fff;align-self:flex-end}
+.bubble.ai{background:#1e2a4a;color:#e8ecf4;align-self:flex-start}
+.kb{margin-top:auto;background:#0a1230;padding:8px;display:grid;grid-template-columns:repeat(7,1fr);gap:4px}
+.key{background:#1e2a4a;border-radius:6px;font-size:11px;text-align:center;padding:6px 0;color:#cfe0ff}
+section{padding:26px 0}
+h2{font-size:22px;margin-bottom:14px}
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px}
+@media(max-width:820px){.cards{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.cards{grid-template-columns:1fr}}
+.card{background:#111a33;border:1px solid #1e2a4a;border-radius:14px;padding:16px}
+.card h3{font-size:15px;margin-bottom:8px}
+.card p{font-size:13px;color:#9db4dd}
+table{width:100%;border-collapse:collapse;font-size:13px;background:#111a33;border-radius:12px;overflow:hidden}
+th,td{text-align:left;padding:10px 12px;border-bottom:1px solid #1e2a4a}
+th{background:#182449;color:#9db4dd;font-weight:600}
+code{background:#0a1230;border:1px solid #1e2a4a;border-radius:6px;padding:1px 6px;font-size:12px;color:#9fe8ff}
+pre{background:#0a1230;border:1px solid #1e2a4a;border-radius:12px;padding:14px;overflow:auto;font-size:12.5px;color:#cfe0ff}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}}
+ul.tight{padding-left:20px;font-size:14px;color:#c6d4ef}
+ul.tight li{margin:6px 0}
+footer{border-top:1px solid #1e2a4a;margin-top:20px;padding:20px 0 40px;color:#7d90b5;font-size:13px}
+.pill{display:inline-block;background:#13234d;border:1px solid #2b3c66;color:#9fe8ff;border-radius:999px;padding:2px 10px;font-size:12px;margin:2px 4px 2px 0}
+</style>
+</head>
+<body>
+<header class="top"><div class="wrap">
+<div class="logo">AI</div>
+<div><strong>ESP32-S3 触摸屏 AI 聊天固件</strong></div>
+<span class="badge">ESP32-S3R8 · 320×480 · AXS15231B</span>
+</div></header>
+<div class="wrap">
+<div class="hero"><div class="hero-grid">
+<div>
+<span class="pill">上电即用</span><span class="pill">中文软键盘 + 拼音</span><span class="pill">OpenAI 兼容接口</span>
+<h1>微雪 ESP32-S3-Touch-LCD-3.5B<br>独立运行的 AI 助手</h1>
+<p class="sub">无需手机或电脑配合。气泡式聊天、BLE / TCP 串口助手、AI 报文分析、双分区 OTA，全部在 3.5 寸触摸屏上完成。WiFi 与 API 配置存 NVS，断电不丢。</p>
+<div class="cta">
+<a class="btn primary" href="#build">编译烧录</a>
+<a class="btn ghost" href="#ota">OTA 升级</a>
+<a class="btn ghost" href="#files">源码结构</a>
+</div>
+</div>
+<div>
+<div class="device"><div class="screen">
+<div class="screen-bar"><span>AI 聊天</span><span><span class="dot"></span>主页</span></div>
+<div class="bubble ai">你好！我是触屏 AI 助手，WiFi 已连接。</div>
+<div class="bubble user">用 HEX 发送 AA 55 01 是什么意思？</div>
+<div class="bubble ai">这是典型帧头 AA 55 + 命令 01，建议回复确认帧…</div>
+<div class="kb"><div class="key">拼</div><div class="key">你</div><div class="key">好</div><div class="key">A</div><div class="key">A</div><div class="key">5</div><div class="key">5</div><div class="key">退格</div><div class="key">符号</div><div class="key">中/英</div><div class="key">发送</div><div class="key">收起</div><div class="key">清屏</div><div class="key">_</div></div>
+</div></div>
+</div>
+</div></div>
+<section id="features">
+<h2>功能</h2>
+<div class="cards">
+<div class="card"><h3>AI 聊天</h3><p>软键盘拼音 / 英文 / 符号页，退格长按连删；气泡界面可拖动滚动；OpenAI 兼容接口，默认 DeepSeek。</p></div>
+<div class="card"><h3>蓝牙 / 串口助手</h3><p>BLE Nordic UART + WiFi TCP :8888；HEX / 文本双视图，最多保留 60 条，实时滚动。</p></div>
+<div class="card"><h3>AI 报文分析</h3><p>点任意报文进入分析页，逐字节解释协议、异常风险，并给出建议回复指令。</p></div>
+<div class="card"><h3>OTA 空中升级</h3><p>ArduinoOTA 推送 + HTTP URL 拉取，屏幕实时进度条，失败保留旧槽位可重推。</p></div>
+</div>
+</section>
+<section id="hardware">
+<h2>硬件与分区</h2>
+<div class="grid2">
+<div>
+<table>
+<tr><th>项目</th><th>规格</th></tr>
+<tr><td>主控</td><td>ESP32-S3R8（16MB Flash / 8MB PSRAM）</td></tr>
+<tr><td>屏幕</td><td>AXS15231B QSPI 320×480 触摸一体</td></tr>
+<tr><td>开发板</td><td>微雪 ESP32-S3-Touch-LCD-3.5B</td></tr>
+<tr><td>依赖库</td><td>Arduino_GFX ≥1.6.0 · U8g2 ≥2.35.0 · ArduinoJson ≥7.0</td></tr>
+<tr><td>板型</td><td><code>esp32-s3-devkitc1-n16r8</code>（勿用通用板）</td></tr>
+</table>
+</div>
+<div>
+<table>
+<tr><th>分区</th><th>偏移</th><th>大小</th></tr>
+<tr><td>app0</td><td>0x10000</td><td>3MB</td></tr>
+<tr><td>app1</td><td>0x310000</td><td>3MB</td></tr>
+<tr><td>ffat</td><td>0x610000</td><td>1.75MB</td></tr>
+<tr><td>coredump</td><td>0x7D0000</td><td>128KB</td></tr>
+</table>
+<p class="sub" style="margin-top:8px">分区表尾地址压在 8MB 以内，8MB / 16MB 镜像头均可通过校验。表文件：<code>partitions/app3M_fat1M_8MB.csv</code></p>
+</div>
+</div>
+</section>
+<section id="build">
+<h2>编译</h2>
+<div class="grid2">
+<div><h3 style="font-size:15px;margin-bottom:8px">Arduino IDE</h3><ul class="tight"><li>安装 esp32 板支持包，库：GFX / U8g2 / ArduinoJson</li><li>打开 <code>esp32_ai_chat/esp32_ai_chat.ino</code></li><li>ESP32S3 Dev Module · OPI PSRAM · 16MB · QIO 80MHz</li><li>分区选导入的 <code>app3M_fat1M_8MB</code>，USB CDC On Boot 启用</li></ul></div>
+<div><h3 style="font-size:15px;margin-bottom:8px">PlatformIO / Actions</h3><pre>pio run
+# Actions 构件 firmware-bin：
+# firmware.bin  （OTA 用，纯应用分区）
+# merged_flash.bin（0x0 单文件刷入用）</pre></div>
+</div>
+</section>
+<section id="ota">
+<h2>OTA 使用</h2>
+<pre># A. ArduinoOTA 推送（同网段）
+pip install arduino-ota
+arduino-ota --port &lt;设备IP&gt; --hostname ESP32-AI-S3 -i esp32s3 firmware.bin
+
+# B. URL 拉取（电脑开 HTTP）
+python -m http.server 8000
+# 设备：设置 → 固件升级 → http://&lt;电脑IP&gt;:8000/firmware.bin</pre>
+</section>
+<section id="files">
+<h2>源码结构</h2>
+<pre>esp32_ai_chat/
+  esp32_ai_chat.ino   12 屏路由 / 触摸 / 主循环
+  board_config.h      引脚 / 屏幕尺寸
+  ui.{cpp,h}          绘图 / 字体 / 气泡
+  keyboard.{cpp,h}    软键盘 + 拼音
+  ai_client.{cpp,h}   OpenAI 兼容调用
+  serial_link.*       BLE UART + TCP :8888
+  frame_log.*         60 条报文记录
+  ota_update.*        ArduinoOTA + URL
+  config_store.*      NVS 存 WiFi / API
+  chat_store.*        内存聊天记录</pre>
+<p class="sub">HTTPS 使用 setInsecure（Key 只发往自填服务器）；聊天与报文记录仅内存保存，重启清空。</p>
+</section>
+</div>
+<footer><div class="wrap">MIT License · GFX / U8g2 / ArduinoJson · BLE 仅支持 BLE 5.0（无经典 SPP）· 原生 USB 串口 115200 输出 [boot] 日志</div></footer>
+</body>
+</html>
+HTML_EOF
+PROJECT_JSON="{\"project\":\"$PROJECT_ROOT\",\"directory\":\"$DIST_DIR\"}"
+/usr/bin/time -p bash -c 'printf "%s" "$0" | tee "$1" > /dev/null' "$PROJECT_JSON" "$WEB_DIR/deployment-output.json"
+/usr/bin/time -p bash -c 'printf "%s" "$0" | tee "$1" > /dev/null' "$PROJECT_JSON" "$FALLBACK_WEB_DIR/deployment-output.json"
+/usr/bin/time -p cat "$WEB_DIR/deployment-output.json"
+/usr/bin/time -p ls -l "$DIST_DIR/index.html"
+/usr/bin/time -p tee "$PROJECT_ROOT/.omgithub-static-server.cjs" > /dev/null <<'SERVER_EOF'
+const http = require('http');
+const fs = require('fs');
+const path = require('path');
+const root = path.join(__dirname, 'dist');
+const port = Number(process.env.PORT || 3000);
+const mime = {'.html':'text/html; charset=utf-8','.js':'application/javascript','.css':'text/css','.json':'application/json','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.webp':'image/webp'};
+const server = http.createServer((req, res) => {
+  try {
+    const url = new URL(req.url, 'http://localhost');
+    let p = decodeURIComponent(url.pathname);
+    if (p.endsWith('/')) p += 'index.html';
+    const file = path.normalize(path.join(root, '.' + p));
+    if (!file.startsWith(root)) { res.writeHead(404); res.end('Not found'); return; }
+    let target = file;
+    if (!fs.existsSync(target)) target = path.join(root, 'index.html');
+    const stat = fs.statSync(target);
+    if (stat.isDirectory()) target = path.join(target, 'index.html');
+    const ext = path.extname(target);
+    res.setHeader('Content-Type', mime[ext] || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.end(fs.readFileSync(target));
+  } catch (e) { res.writeHead(404); res.end('Not found'); }
+});
+server.listen(port, '0.0.0.0', () => console.log(`static serving ${root} on ${port}`));
+SERVER_EOF
+/usr/bin/time -p node "$PROJECT_ROOT/.omgithub-static-server.cjs"
