@@ -40,8 +40,9 @@ jobs:
           ls -l merged_flash.bin
       - name: Decode backtrace
         run: |
-          ADDR2LINE=$HOME/.platformio/packages/toolchain-xtensa-esp32s3/bin/xtensa-esp32s3-elf-addr2line
-          $ADDR2LINE -pfiaC -e .pio/build/esp32s3/firmware.elf \
+          ADDR2LINE=$(find $HOME/.platformio/packages -name 'xtensa-esp32s3-elf-addr2line' | head -1)
+          echo "using: $ADDR2LINE"
+          "$ADDR2LINE" -pfiaC -e .pio/build/esp32s3/firmware.elf \
             0x4038390d 0x403838d5 0x4038a9d2 0x4038431a \
             0x42050142 0x4203cc8e 0x420507cb 0x4205081a \
             0x4203bbe3 0x420132be 0x420133b5 0x4201bce6 \
