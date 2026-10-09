@@ -1,0 +1,47 @@
+name: Build Firmware
+
+on:
+  push:
+    branches: [master, main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install PlatformIO
+        run: pip install -U platformio
+      - name: Build
+        run: pio run
+      - name: Merge flash image
+        run: |
+          cp .pio/build/esp32s3/bootloader.bin merged_flash.bin
+          truncate -s 32768 merged_flash.bin
+          cat .pio/build/esp32s3/partitions.bin >> merged_flash.bin
+          truncate -s 57344 merged_flash.bin
+          if [ -f .pio/build/esp32s3/boot_app0.bin ]; then
+            cat .pio/build/esp32s3/boot_app0.bin >> merged_flash.bin
+          else
+            head -c 8192 /dev/zero | tr '\0' '\377' >> merged_flash.bin
+          fi
+          truncate -s 65536 merged_flash.bin
+          cat .pio/build/esp32s3/firmware.bin >> merged_flash.bin
+          ls -l merged_flash.bin
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-bin
+          path: |
+            .pio/build/esp32s3/firmware.bin
+            merged_flash.bin
