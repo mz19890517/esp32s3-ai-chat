@@ -11,8 +11,9 @@
 #include "frame_log.h"
 #include "serial_link.h"
 #include "ota_update.h"
+#include "bms_client.h"
 
-enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI, S_SERIAL, S_FRAMES, S_AIANA, S_OTA, S_OTAURL };
+enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI, S_SERIAL, S_FRAMES, S_AIANA, S_OTA, S_OTAURL, S_BMS };
 static Screen scr = S_CHAT;
 
 static bool dirtyFull = true;
@@ -413,13 +414,14 @@ const char *t = (scr == S_SETTINGS) ? "设置" : (scr == S_WIFI) ? "WiFi 设置"
 static void drawSettingsBody()
 {
   struct Row { int y; const char *label; };
-  Row rows[6] = {
+  Row rows[7] = {
     {42, "WiFi 设置"},
     {110, "AI 接口设置"},
-    {178, "固件升级 (OTA)"},
-    {246, "清除聊天记录"},
-    {314, "重启设备"},
-    {382, "返回聊天"},
+    {178, "电池监测 (BMS)"},
+    {246, "固件升级 (OTA)"},
+    {314, "清除聊天记录"},
+    {382, "重启设备"},
+    {450, "返回聊天"},
   };
   for (auto &r : rows)
   {
@@ -490,6 +492,52 @@ static void drawOtaUrlBody()
   drawTextAt(14, 188, "再把电脑 IP 和端口填到上面", COL_SUB, COL_BG);
   drawBtn(3, 246, 100, 44, "取消", COL_KEY_FN, COL_TEXT);
   drawBtn(217, 246, 100, 44, "保存", COL_ACCENT, 0xFFFF);
+}
+
+static void drawBmsBody()
+{
+  gfx->fillRoundRect(3, 42, 314, 52, 8, COL_PANEL);
+  drawTextAt(12, 62, "状态", COL_SUB, COL_PANEL);
+  drawTextAt(96, 62, bms::connected() ? (bms::hasData() ? "已连接" : "连接中..") : "扫描中..",
+              bms::hasData() ? COL_OK : COL_ACCENT, COL_PANEL);
+
+  if (!bms::hasData())
+  {
+    drawTextAt(12, 130, "正在搜索 BMS 蓝牙设备..", COL_SUB, COL_BG);
+    drawTextAt(12, 158, "请确保电池 BMS 已上电并广播", COL_SUB, COL_BG);
+    return;
+  }
+
+  bms::BaseInfo I = bms::info();
+  gfx->fillRoundRect(3, 104, 314, 52, 8, COL_PANEL);
+  drawTextAt(12, 124, "总压", COL_SUB, COL_PANEL);
+  drawTextAt(96, 124, String(I.totalVoltage, 2) + " V", COL_TEXT, COL_PANEL);
+  drawTextAt(12, 146, "电流", COL_SUB, COL_PANEL);
+  drawTextAt(96, 146, String(I.current, 2) + " A", COL_TEXT, COL_PANEL);
+
+  gfx->fillRoundRect(3, 162, 314, 52, 8, COL_PANEL);
+  drawTextAt(12, 182, "SOC", COL_SUB, COL_PANEL);
+  drawTextAt(96, 182, String(I.soc) + " %", COL_TEXT, COL_PANEL);
+  drawTextAt(12, 204, "循环", COL_SUB, COL_PANEL);
+  drawTextAt(96, 204, String(I.cycles), COL_TEXT, COL_PANEL);
+
+  gfx->fillRoundRect(3, 220, 314, 52, 8, COL_PANEL);
+  drawTextAt(12, 240, "剩余容量", COL_SUB, COL_PANEL);
+  drawTextAt(96, 240, String(I.remainPower, 2) + " Ah", COL_TEXT, COL_PANEL);
+  drawTextAt(12, 262, "标称容量", COL_SUB, COL_PANEL);
+  drawTextAt(96, 262, String(I.nominalPower, 2) + " Ah", COL_TEXT, COL_PANEL);
+
+  gfx->fillRoundRect(3, 278, 314, 52, 8, COL_PANEL);
+  drawTextAt(12, 298, "温度1", COL_SUB, COL_PANEL);
+  drawTextAt(96, 298, String(I.temperatures[0], 1) + " C", COL_TEXT, COL_PANEL);
+  drawTextAt(12, 320, "温度2", COL_SUB, COL_PANEL);
+  drawTextAt(96, 320, String(I.temperatures[1], 1) + " C", COL_TEXT, COL_PANEL);
+
+  gfx->fillRoundRect(3, 336, 314, 52, 8, COL_PANEL);
+  drawTextAt(12, 356, "电芯数", COL_SUB, COL_PANEL);
+  drawTextAt(96, 356, String(I.cellCount), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 378, "平衡电流", COL_SUB, COL_PANEL);
+  drawTextAt(96, 378, String(I.balanceCurrent, 2) + " A", COL_TEXT, COL_PANEL);
 }
 
 static void drawRssi(int x, int y, int rssi)
@@ -771,6 +819,9 @@ static void drawBody()
     break;
   case S_OTAURL:
     drawOtaUrlBody();
+    break;
+  case S_BMS:
+    drawBmsBody();
     break;
   case S_CHAT:
     chatRender(CHAT_TOP, chatViewBot() - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
@@ -1278,6 +1329,7 @@ static void routeTouch(bool press, bool release, bool down, int x, int y)
   case S_AIANA: handleAnaTouch(press, down, x, y); break;
   case S_OTA: handleOtaTouch(press, down, x, y); break;
   case S_OTAURL: handleOtaUrlTouch(press, down, x, y); break;
+  case S_BMS: break;
   case S_SETTINGS: handleSettingsTouch(press, x, y); break;
   case S_WIFI: handleWifiTouch(press, release, down, x, y); break;
   case S_WIFIPASS: handleWifiPassTouch(press, down, x, y); break;
@@ -1308,6 +1360,7 @@ void setup()
   STK("ai");
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
+  bms::begin();
   STK("wifi-mode");
   slBegin("ESP32-S3-AI");
   STK("ble");
@@ -1375,6 +1428,7 @@ void loop()
   serviceWifiConnect();
   slPoll();
   otaPoll();
+  bms::poll();
 
   uint8_t os = (uint8_t)otaState();
   int op = otaPercent();

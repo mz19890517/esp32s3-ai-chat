@@ -6,10 +6,7 @@
 #if __has_include("esp32-hal-alloc-ble-mem.h")
 #include "esp32-hal-alloc-ble-mem.h"
 #endif
-#include <BLE2902.h>
-#include <BLEDevice.h>
-#include <BLEServer.h>
-#include <BLEUtils.h>
+#include <NimBLEDevice.h>
 
 static const char *SVC_UUID = "6e400001-b5a3-f393-e0a9-e50e24dcca9e";
 static const char *RX_UUID = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
@@ -24,8 +21,8 @@ struct RxItem
 };
 
 static QueueHandle_t rxQ;
-static BLECharacteristic *txChar = nullptr;
-static BLEServer *bleSrv = nullptr;
+static NimBLECharacteristic *txChar = nullptr;
+static NimBLEServer *bleSrv = nullptr;
 static bool bleConnected = false;
 static WiFiServer *tcpSrv = nullptr;
 static WiFiClient tcpCli;
@@ -34,26 +31,26 @@ static LinkMode mode = LINK_BLE;
 static char devName[24] = "ESP32-AI";
 static bool bleReady = false;
 
-class RxCb : public BLECharacteristicCallbacks
+class RxCb : public NimBLECharacteristicCallbacks
 {
-  void onWrite(BLECharacteristic *c) override
+  void onWrite(NimBLECharacteristic *c) override
   {
-    String v = c->getValue();
+    NimBLEAttValue v = c->getValue();
     if (!v.length()) return;
     RxItem it;
     it.len = (uint16_t)min((int)v.length(), RX_MAX);
-    memcpy(it.data, v.c_str(), it.len);
+    memcpy(it.data, v.data(), it.len);
     xQueueSend(rxQ, &it, 0);
   }
 };
 
-class SrvCb : public BLEServerCallbacks
+class SrvCb : public NimBLEServerCallbacks
 {
-  void onConnect(BLEServer *s) override { bleConnected = true; }
-  void onDisconnect(BLEServer *s) override
+  void onConnect(NimBLEServer *s) override { bleConnected = true; }
+  void onDisconnect(NimBLEServer *s) override
   {
     bleConnected = false;
-    BLEDevice::startAdvertising();
+    NimBLEDevice::startAdvertising();
   }
 };
 
@@ -74,23 +71,25 @@ void slBegin(const char *name)
   rxQ = xQueueCreate(24, sizeof(RxItem));
   SLOG("[ble] queue ok\n");
 
-  BLEDevice::init(devName);
+  NimBLEDevice::init(devName);
   SLOG("[ble] init ok\n");
-  BLEDevice::setMTU(185);
+  NimBLEDevice::setMTU(185);
   SLOG("[ble] mtu ok\n");
-  bleSrv = BLEDevice::createServer();
+  bleSrv = NimBLEDevice::createServer();
   bleSrv->setCallbacks(new SrvCb());
   SLOG("[ble] server ok\n");
-  BLEService *svc = bleSrv->createService(SVC_UUID);
+  NimBLEService *svc = bleSrv->createService(SVC_UUID);
   SLOG("[ble] service ok\n");
-  txChar = svc->createCharacteristic(TX_UUID, BLECharacteristic::PROPERTY_NOTIFY);
-  txChar->addDescriptor(new BLE2902());
-  BLECharacteristic *rxChar = svc->createCharacteristic(RX_UUID, BLECharacteristic::PROPERTY_WRITE | BLECharacteristic::PROPERTY_WRITE_NR);
+  txChar = svc->createCharacteristic(TX_UUID, NIMBLE_PROPERTY::NOTIFY);
+  NimBLECharacteristic *rxChar = svc->createCharacteristic(RX_UUID, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
   rxChar->setCallbacks(new RxCb());
   SLOG("[ble] chars ok\n");
   svc->start();
   SLOG("[ble] svc start ok\n");
-  BLEDevice::startAdvertising();
+  NimBLEAdvertising *adv = NimBLEDevice::getAdvertising();
+  adv->addServiceUUID(SVC_UUID);
+  adv->setScanResponse(true);
+  adv->start();
   SLOG("[ble] adv ok\n");
   bleReady = true;
 
@@ -113,7 +112,7 @@ String slLocalIp() { return WiFi.localIP().toString(); }
 String slStatus()
 {
   if (mode == LINK_BLE) return bleConnected ? String("BLE 已连接 ") + devName : String("BLE 等待连接 ") + devName;
-  String s = "TCP 服务器 " + slLocalIp() + ":" + String(SL_TCP_PORT);
+  String s = "TCP 服务 " + slLocalIp() + ":" + String(SL_TCP_PORT);
   s += tcpCli.connected() ? " 已连接" : " 等待连接";
   return s;
 }
@@ -142,13 +141,13 @@ bool slSend(const String &s)
 void slOtaSuspend()
 {
   if (!bleReady) return;
-  BLEDevice::stopAdvertising();
+  NimBLEDevice::stopAdvertising();
 }
 
 void slOtaResume()
 {
   if (!bleReady) return;
-  BLEDevice::startAdvertising();
+  NimBLEDevice::startAdvertising();
 }
 
 void slPoll()
