@@ -8,6 +8,7 @@ struct Config
   String url;
   String key;
   String model;
+  String otaUrl;
 };
 
 extern Config cfg;
@@ -15,5 +16,6 @@ extern Config cfg;
 void cfgLoad();
 void cfgSaveWiFi();
 void cfgSaveApi();
+void cfgSaveOtaUrl();
 
 String apiEndpoint(const String &base);

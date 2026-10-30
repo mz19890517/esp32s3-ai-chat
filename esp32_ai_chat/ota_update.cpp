@@ -15,13 +15,14 @@
 static OtaState st = OST_IDLE;
 static volatile int pct = 0;
 static String msg;
-static SemaphoreHandle_t mtx;
+static SemaphoreHandle_t mtx = nullptr;
 static bool armed = true;
 static volatile bool webBusy = false;
 static volatile bool restartPending = false;
 static uint32_t restartAt = 0;
 static TaskHandle_t webTaskHandle = nullptr;
 static String webUrlTmp;
+static OtaChannel chn = OCH_NONE;
 
 static void setState(OtaState s, const String &m, int p = 0)
 {
@@ -61,6 +62,45 @@ void otaSetArmed(bool a) { armed = a; }
 bool otaBusy() { return otaState() == OST_RUNNING; }
 bool otaRestartPending() { return restartPending; }
 
+void otaSetChannel(OtaChannel c) { chn = c; }
+OtaChannel otaChannel() { return chn; }
+
+const char *otaChannelName()
+{
+  switch (chn)
+  {
+  case OCH_NET:
+    return "网络推送";
+  case OCH_URL:
+    return "URL 下载";
+  case OCH_SD:
+    return "TF 卡";
+  case OCH_BLE:
+    return "蓝牙推送";
+  default:
+    return "空闲";
+  }
+}
+
+void otaReport(OtaState s, const String &m, int p)
+{
+  if (p < 0) p = 0;
+  if (p > 100) p = 100;
+  setState(s, m, p);
+}
+
+void otaRequestRestart(uint32_t delayMs)
+{
+  restartAt = millis() + delayMs;
+  restartPending = true;
+}
+
+size_t otaTargetSize()
+{
+  const esp_partition_t *n = esp_ota_get_next_update_partition(nullptr);
+  return n ? (size_t)n->size : 0;
+}
+
 String otaVersion()
 {
   String v = String(FW_VERSION);
@@ -69,15 +109,17 @@ String otaVersion()
   return v;
 }
 
+static String partName(const esp_partition_t *p)
+{
+  if (!p) return "-";
+  return (p->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) ? String("ota_0") : String("ota_1");
+}
+
 String otaSlot()
 {
   const esp_partition_t *p = esp_ota_get_running_partition();
   const esp_partition_t *n = esp_ota_get_next_update_partition(nullptr);
-  String s;
-  if (p) s = (p->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) ? String("ota_0") : String("ota_1");
-  s += "  ->  ";
-  if (n) s += (n->subtype == ESP_PARTITION_SUBTYPE_APP_OTA_0) ? String("ota_0") : String("ota_1");
-  return s;
+  return partName(p) + "  ->  " + partName(n);
 }
 
 String otaFreeSpace()
@@ -87,6 +129,8 @@ String otaFreeSpace()
   float mb = n->size / 1048576.0f;
   return String(mb, 1) + " MB";
 }
+
+/* ---------------- URL 下载升级 ---------------- */
 
 static void webFail(const String &m)
 {
@@ -169,7 +213,7 @@ static void webTask(void *)
         return;
       }
       total += n;
-      pct = total * 100 / len;
+      pct = (int)((int64_t)total * 100 / len);
     }
     else delay(2);
   }
@@ -190,7 +234,7 @@ static void webTask(void *)
 
   setState(OST_DONE, "升级完成，即将重启", 100);
   webBusy = false;
-  restartPending = true;
+  otaRequestRestart(1500);
   vTaskDelete(nullptr);
 }
 
@@ -211,6 +255,7 @@ bool otaWebStart(const String &urlIn)
   }
   webUrlTmp = url;
   webBusy = true;
+  otaSetChannel(OCH_URL);
   if (xTaskCreate(webTask, "otaweb", 16384, nullptr, 2, &webTaskHandle) != pdPASS)
   {
     webBusy = false;
@@ -220,15 +265,18 @@ bool otaWebStart(const String &urlIn)
   return true;
 }
 
+/* ---------------- ArduinoOTA 网络推送 ---------------- */
+
 static void onStart()
 {
   slOtaSuspend();
+  otaSetChannel(OCH_NET);
   setState(OST_RUNNING, "已连接推送端，接收固件", 0);
 }
 
 static void onProgress(unsigned cur, unsigned total)
 {
-  pct = (int)(cur * 100 / total);
+  pct = (int)((uint64_t)cur * 100 / (total ? total : 1));
   if (mtx) xSemaphoreTake(mtx, portMAX_DELAY);
   msg = "写入固件 " + String(cur / 1024) + "/" + String(total / 1024) + " KB";
   if (mtx) xSemaphoreGive(mtx);
@@ -237,14 +285,12 @@ static void onProgress(unsigned cur, unsigned total)
 static void onEndOk()
 {
   setState(OST_DONE, "升级完成，即将重启", 100);
-  restartPending = true;
-  restartAt = millis() + 1500;
+  otaRequestRestart(1500);
 }
 
 static void onError(ota_error_t e)
 {
-  String m = "推送升级失败，错误码 " + String((int)e);
-  setState(OST_FAIL, m);
+  setState(OST_FAIL, "推送升级失败，错误码 " + String((int)e));
   slOtaResume();
 }
 

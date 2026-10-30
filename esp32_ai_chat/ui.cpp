@@ -139,17 +139,47 @@ void sanitizeText(String &s)
 
 String fitTail(const String &s, int maxW)
 {
+  if (!s.length()) return s;
+  if (maxW <= 0) return String();
   if (textWidth(s) <= maxW) return s;
-  String out = "..";
-  int start = 0;
-  for (unsigned i = 0; i < s.length(); i++)
+  int budget = maxW - textWidth("..");
+  if (budget <= 0) return String("..");
+  // 从尾部逐字累加宽度（字宽可加，无字距），避免原实现每字符都重测整串
+  int i = (int)s.length();
+  int start = i;
+  while (i > 0)
   {
-    if (((uint8_t)s[i] & 0xC0) == 0x80) continue;
-    String t = ".." + s.substring(i);
-    if (textWidth(t) > maxW) break;
-    start = i;
+    int j = prevUtf8(s, i);
+    int w = textWidth(s.substring(j, i));
+    if (w > budget) break;
+    budget -= w;
+    start = j;
+    i = j;
   }
   return ".." + s.substring(start);
+}
+
+void drawScrollbar(int x, int top, int viewH, int contentH, int scroll)
+{
+  if (contentH <= viewH || viewH <= 0 || contentH <= 0) return;
+  int maxScroll = contentH - viewH;
+  if (maxScroll <= 0) return;
+  if (scroll < 0) scroll = 0;
+  if (scroll > maxScroll) scroll = maxScroll;
+  int th = (int)((long)viewH * viewH / contentH);
+  if (th < 18) th = 18;
+  int ty = top + (int)((long)(viewH - th) * scroll / maxScroll);
+  gfx->fillRect(x, top, 3, viewH, COL_PANEL);
+  gfx->fillRect(x, ty, 3, th, COL_SUB);
+}
+
+void drawProgressBar(int x, int y, int w, int h, int pct)
+{
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  gfx->drawRoundRect(x, y, w, h, h / 2, COL_LINE);
+  int fw = (int)((long)(w - 4) * pct / 100);
+  if (fw > 0) gfx->fillRoundRect(x + 2, y + 2, fw, h - 4, (h - 4) / 2, COL_ACCENT);
 }
 
 bool ptIn(int tx, int ty, int x, int y, int w, int h)

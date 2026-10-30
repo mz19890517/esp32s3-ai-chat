@@ -11,9 +11,12 @@
 #include "frame_log.h"
 #include "serial_link.h"
 #include "ota_update.h"
+#include "ota_http.h"
 #include "bms_client.h"
+#include "cfg_table.h"
+#include "rec_store.h"
 
-enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI, S_SERIAL, S_FRAMES, S_AIANA, S_OTA, S_OTAURL, S_BMS };
+enum Screen : uint8_t { S_HOME, S_CHAT, S_SETTINGS, S_WIFI, S_WIFIPASS, S_API, S_XIAOZHI, S_SERIAL, S_FRAMES, S_AIANA, S_OTA, S_OTAURL, S_BMS, S_STATUS, S_CONF, S_MODELS };
 static Screen scr = S_CHAT;
 
 static bool dirtyFull = true;
@@ -44,9 +47,49 @@ static String selSsid;
 static bool wcConnecting = false;
 static uint32_t wcStart = 0;
 static String wcSsid, wcPw;
+static String passDraft;   // WiFi 密码独立缓冲，不再借用聊天草稿
 
 static int editField = -1;
 static String editDraft;
+
+// 配置项页（S_CONF）：列表由 cfg_table 生成，点按编辑
+static int confScroll = 0;
+static int confIdx = -1;      // >=0 表示正在键盘编辑第 confIdx 项
+static String confDraft;
+
+// 触摸抬起保护：按下时发生了跳页/退出编辑，就把同一次触摸的 release 吞掉，
+// 防止它落进新页面的列表被当成点选（配置项页“进页就弹编辑”的根因）
+static bool releaseGuard = false;
+
+// WiFi 密码页：本次进入是否来自已记住的网络（明文预填密码，可直接连接）
+static bool wifiPassSaved = false;
+
+// 模型列表页（S_MODELS）
+static int modelsScroll = 0;
+
+static int modelsCount()
+{
+  String ms = cfgModels();
+  if (!ms.length()) return 0;
+  int n = 1;
+  for (int i = 0; i < ms.length(); i++)
+    if (ms[i] == '\n') n++;
+  return n;
+}
+
+static String modelsAt(int i)
+{
+  String ms = cfgModels();
+  int start = 0;
+  for (int k = 0; k <= i; k++)
+  {
+    int p = ms.indexOf('\n', start);
+    if (k == i)
+      return (p < 0) ? ms.substring(start) : ms.substring(start, p);
+    start = p + 1;
+  }
+  return String();
+}
 
 static bool lastDown = false;
 static int lastX = 0, lastY = 0, downX = 0, downY = 0;
@@ -82,6 +125,7 @@ static uint8_t lastOtaState = 0xFF;
 static int lastOtaPct = -1;
 
 static String otaUrl;
+static String otaUrlEdit;   // 地址编辑缓冲（取消时丢弃）
 
 static const char *AI_SYS_ANALYZE = "你是一位嵌入式通信协议分析专家，精通 BLE、串口、AT 指令和各类 IoT 设备协议解析。用简洁准确的中文回答，尽量给出字节级别的解释，不要编造不存在的协议。";
 
@@ -256,9 +300,11 @@ static void serviceWifiConnect()
     cfg.ssid = wcSsid;
     cfg.wpass = wcPw;
     cfgSaveWiFi();
+    wifiRecUpsert(wcSsid, wcPw);   // 像手机一样记住连过的 WiFi，下次免输入
+    kbReset();
+    kbAttach(&draft);
     kbSetMask(false);
     kbSetSendLabel("发送");
-    kbReset();
     showToast("已连接 " + WiFi.localIP().toString());
     gotoScreen(S_SETTINGS);
     return;
@@ -313,6 +359,8 @@ static void serviceScan()
   }
 }
 
+#define AI_HIST_CHARS 6000   // 单次请求携带的历史正文字数上限
+
 static void sendToAi()
 {
   String text = kbPeek();
@@ -326,13 +374,21 @@ static void sendToAi()
   chatScroll = 0;
   dirtyChat = true;
   dirtyInput = true;
+  // 历史按总字数从最近往回裁剪，避免一次请求把堆与上行带宽吃满
   std::vector<AiMsg> hist;
-  for (auto &m : msgs)
+  int budget = AI_HIST_CHARS;
+  for (int i = (int)msgs.size() - 1; i >= 0; i--)
   {
+    ChatMsg &m = msgs[i];
     if (m.err) continue;
-    hist.push_back({m.user ? "user" : "assistant", m.text});
+    if (!hist.empty() && (int)m.text.length() > budget) break;
+    budget -= (int)m.text.length();
+    AiMsg am;
+    am.role = m.user ? "user" : "assistant";
+    am.content = m.text;
+    hist.insert(hist.begin(), am);
+    if ((int)hist.size() >= 20 || budget <= 0) break;
   }
-  if (hist.size() > 20) hist.erase(hist.begin(), hist.end() - 20);
   aiStart(hist, apiEndpoint(cfg.url), cfg.key, cfg.model);
 }
 
@@ -363,19 +419,7 @@ static void serviceAi()
 
 static void drawSplash(const String &msg)
 {
-  gfx->fillScreen(COL_BG);
-  gfx->fillCircle(SCREEN_W / 2, 150, 46, COL_ACCENT);
-  gfx->setTextSize(2, 2);
-  gfx->setCursor(SCREEN_W / 2 - 30, 160);
-  gfx->setTextColor(0xFFFF, COL_ACCENT);
-  gfx->print("AI");
-  gfx->setTextSize(1);
-  const char *name = "触摸 AI 助手";
-  int tw = textWidth(name);
-  drawTextAt((SCREEN_W - tw) / 2, 240, name, COL_TEXT, COL_BG);
-  tw = textWidth(msg.c_str());
-  drawTextAt((SCREEN_W - tw) / 2, 300, msg.c_str(), COL_SUB, COL_BG);
-  gfx->flush();
+  bootSplash(msg);
 }
 
 static void drawTitleBar()
@@ -406,6 +450,9 @@ const char *t = (scr == S_SETTINGS) ? "设置" : (scr == S_WIFI) ? "WiFi 设置"
                                      : (scr == S_AIANA)           ? "AI 报文分析"
                                      : (scr == S_OTA)             ? "固件升级"
                                      : (scr == S_OTAURL)          ? "升级地址"
+                                     : (scr == S_CONF)            ? "配置项"
+                                     : (scr == S_MODELS)          ? "模型列表"
+                                     : (scr == S_STATUS)          ? "设备状态"
                                                                    : "API 设置";
     drawTextAt(70, centerBaseY(0, TITLE_H), t, COL_TEXT, COL_PANEL);
   }
@@ -413,23 +460,25 @@ const char *t = (scr == S_SETTINGS) ? "设置" : (scr == S_WIFI) ? "WiFi 设置"
 
 static void drawSettingsBody()
 {
+  // 9 行：行高 46、步进 49，最后一行 432..478，全部在 480 屏内
   struct Row { int y; const char *label; };
-  Row rows[7] = {
-    {42, "WiFi 设置"},
-    {110, "AI 接口设置"},
-    {178, "电池监测 (BMS)"},
-    {246, "固件升级 (OTA)"},
-    {314, "清除聊天记录"},
-    {382, "重启设备"},
-    {450, "返回聊天"},
+  Row rows[9] = {
+    {40, "WiFi 设置"},
+    {89, "AI 接口设置"},
+    {138, "电池监测 (BMS)"},
+    {187, "固件升级 (OTA)"},
+    {236, "设备状态"},
+    {285, "配置项"},
+    {334, "清除聊天记录"},
+    {383, "重启设备"},
+    {432, "返回主页"},
   };
   for (auto &r : rows)
   {
-    gfx->fillRoundRect(3, r.y, 314, 58, 8, COL_PANEL);
-    drawTextAt(14, r.y + 21, r.label, COL_TEXT, COL_PANEL);
-    drawTextAt(296, r.y + 21, ">", COL_SUB, COL_PANEL);
+    gfx->fillRoundRect(3, r.y, 314, 46, 8, COL_PANEL);
+    drawTextAt(14, centerBaseY(r.y, 46), r.label, COL_TEXT, COL_PANEL);
+    drawTextAt(296, centerBaseY(r.y, 46), ">", COL_SUB, COL_PANEL);
   }
-  drawTextAt(14, 462, "固件 " FW_VERSION, COL_SUB, COL_BG);
 }
 
 static void drawProgress(int x, int y, int w, int h, int p)
@@ -477,22 +526,273 @@ static void drawOtaBody()
   drawBtn(3, 338, 154, 44, otaArmed() ? "关闭推送" : "开启推送", otaArmed() ? COL_KEY_FN : COL_ACCENT, 0xFFFF);
   drawBtn(163, 338, 154, 44, "设置地址", COL_KEY_FN, COL_TEXT);
   drawBtn(3, 390, 314, 44, "开始 URL 升级", COL_ACCENT, 0xFFFF);
-  drawTextAt(14, 458, "推送端：电脑运行 arduinoOTA 或 Arduino IDE 导出程序", COL_SUB, COL_BG);
+  drawTextAt(14, 448, otaBleReady() ? "蓝牙升级：服务就绪，用 ble_ota 网页" : "蓝牙升级：服务未注册！无法网页升级",
+             otaBleReady() ? COL_SUB : COL_ERR_TX, COL_BG);
+  drawTextAt(14, 466, "SD 升级：/update/fw.bin 开机自动烧录", COL_SUB, COL_BG);
 }
 
 static void drawOtaUrlBody()
 {
   drawTextAt(14, 58, "填写 firmware.bin 的下载地址", COL_SUB, COL_BG);
   gfx->fillRoundRect(3, 70, 314, 40, 8, COL_PANEL);
-  String v = otaUrl;
+  String v = otaUrlEdit;
   v += ((millis() / 500) & 1) ? "_" : "";
   drawTextAt(12, centerBaseY(70, 40), fitTail(v, 290), COL_TEXT, COL_PANEL);
   drawTextAt(14, 136, "本机 IP: " + slLocalIp(), COL_SUB, COL_BG);
-  drawTextAt(14, 164, "电脑上执行 python -m http.server 8000", COL_SUB, COL_BG);
-  drawTextAt(14, 188, "再把电脑 IP 和端口填到上面", COL_SUB, COL_BG);
-  drawBtn(3, 246, 100, 44, "取消", COL_KEY_FN, COL_TEXT);
-  drawBtn(217, 246, 100, 44, "保存", COL_ACCENT, 0xFFFF);
+  drawTextAt(14, 160, "电脑上执行 python -m http.server 8000", COL_SUB, COL_BG);
+  drawTextAt(14, 184, "再把电脑 IP 和端口填到上面", COL_SUB, COL_BG);
+  drawTextAt(14, 208, "返回=放弃修改，保存=写入 NVS", COL_SUB, COL_BG);
+  drawBtn(3, 246, 100, 44, "返回", COL_KEY_FN, COL_TEXT);
+  drawBtn(110, 246, 100, 44, "保存", COL_ACCENT, 0xFFFF);
+  drawBtn(217, 246, 100, 44, "保存并升级", COL_ACCENT, 0xFFFF);
 }
+
+// 设置 → 设备状态：升级进度 + 蓝牙连接信息 + 网络/内存 + 网页 PIN
+static void drawStatusBody()
+{
+  gfx->fillRoundRect(3, 42, 314, 96, 8, COL_PANEL);
+  drawTextAt(12, 58, "固件", COL_SUB, COL_PANEL);
+  drawTextAt(70, 58, fitTail(otaVersion(), 236), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 76, "槽位", COL_SUB, COL_PANEL);
+  drawTextAt(70, 76, otaSlot(), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 94, "目标分区", COL_SUB, COL_PANEL);
+  drawTextAt(70, 94, otaFreeSpace(), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 112, "网页 PIN", COL_SUB, COL_PANEL);
+  if (cfgWebPinRequired())
+  {
+    char b[8];
+    snprintf(b, sizeof(b), "%04u", (unsigned)cfgPin());
+    drawTextAt(70, 112, String("已开启 ") + b, COL_ACCENT, COL_PANEL);
+  }
+  else
+  {
+    drawTextAt(70, 112, "未启用（配置项 → 网页需要 PIN）", COL_SUB, COL_PANEL);
+  }
+
+  gfx->fillRoundRect(3, 146, 314, 88, 8, COL_PANEL);
+  OtaState s = otaState();
+  String st;
+  uint16_t sc = COL_SUB;
+  if (otaBleActive())
+  {
+    st = "正在传输固件 " + String(otaPercent()) + "%";
+    sc = COL_ACCENT;
+  }
+  else if (s == OST_RUNNING)
+  {
+    st = "正在写入固件 " + String(otaPercent()) + "%";
+    sc = COL_ACCENT;
+  }
+  else if (s == OST_DONE)
+  {
+    st = "升级完成";
+    sc = COL_OK;
+  }
+  else if (s == OST_FAIL)
+  {
+    st = "升级失败";
+    sc = COL_ERR_TX;
+  }
+  else st = "空闲";
+  drawTextAt(12, 164, st, sc, COL_PANEL);
+  drawProgress(12, 174, 296, 14, otaPercent());
+  String m = (s == OST_IDLE && !otaBleActive()) ? String("当前没有升级任务") : otaMessage();
+  drawTextAt(12, 216, fitTail(m, 296), COL_SUB, COL_PANEL);
+
+  gfx->fillRoundRect(3, 242, 314, 104, 8, COL_PANEL);
+  drawTextAt(12, 260, "蓝牙名称", COL_SUB, COL_PANEL);
+  drawTextAt(92, 260, slDeviceName(), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 278, "连接状态", COL_SUB, COL_PANEL);
+  drawTextAt(92, 278, slBleConnected() ? "已连接" : "未连接", slBleConnected() ? COL_OK : COL_SUB, COL_PANEL);
+  drawTextAt(12, 296, "广播状态", COL_SUB, COL_PANEL);
+  drawTextAt(92, 296, slBleAdvActive() ? "广播中" : "未广播", slBleAdvActive() ? COL_OK : COL_ERR_TX, COL_PANEL);
+  drawTextAt(12, 314, "本机地址", COL_SUB, COL_PANEL);
+  drawTextAt(92, 314, slBleAddr(), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 332, "网页升级", COL_SUB, COL_PANEL);
+  drawTextAt(92, 332, otaBleReady() ? "服务就绪" : "服务未注册", otaBleReady() ? COL_OK : COL_ERR_TX, COL_PANEL);
+
+  gfx->fillRoundRect(3, 354, 314, 120, 8, COL_PANEL);
+  bool up = wifiUp();
+  drawTextAt(12, 372, "WiFi", COL_SUB, COL_PANEL);
+  drawTextAt(92, 372, up ? WiFi.SSID() : String("未连接"), up ? COL_OK : COL_SUB, COL_PANEL);
+  drawTextAt(12, 390, "本机 IP", COL_SUB, COL_PANEL);
+  drawTextAt(92, 390, up ? WiFi.localIP().toString() : String("-"), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 408, "网页升级", COL_SUB, COL_PANEL);
+  if (up)
+    drawTextAt(92, 408, "端口 " + String(OTA_HTTP_PORT) + " 已就绪", COL_OK, COL_PANEL);
+  else
+    drawTextAt(92, 408, "需要先连上 WiFi", COL_ERR_TX, COL_PANEL);
+  drawTextAt(12, 426, "信号", COL_SUB, COL_PANEL);
+  drawTextAt(92, 426, up ? String(WiFi.RSSI()) + " dBm" : String("-"), COL_TEXT, COL_PANEL);
+  drawTextAt(12, 444, "空闲内存", COL_SUB, COL_PANEL);
+  drawTextAt(92, 444, String(ESP.getFreeHeap() / 1024) + " KB / 最大块 " +
+                            String(ESP.getMaxAllocHeap() / 1024) + " KB", COL_TEXT, COL_PANEL);
+}
+
+// 设置 → 配置项：列表由 cfg_table 生成，网页端同源；点按编辑
+// （BOOL 直接翻转 / ENUM 循环 / STR 与 INT 走键盘编辑）
+static void drawConfBody()
+{
+  if (confIdx >= 0)
+  {
+    const CfgItem &it = cfgAt(confIdx);
+    drawTextAt(14, 58, it.label, COL_SUB, COL_BG);
+    gfx->fillRoundRect(3, 70, 314, 40, 8, COL_PANEL);
+    String v = (it.flags & CFG_SECRET)
+                   ? [] { String s; int n = utf8Count(confDraft); for (int i = 0; i < n; i++) s += '*'; return s; }()
+                   : confDraft;
+    v += ((millis() / 500) & 1) ? "_" : "";
+    drawTextAt(12, centerBaseY(70, 40), fitTail(v, 290), COL_TEXT, COL_PANEL);
+    String tip = (it.type == CT_INT) ? (String("范围 ") + it.minv + " ~ " + it.maxv)
+                 : (it.type == CT_ENUM) ? (String("可选: ") + it.options)
+                                        : String("输入后点保存，返回=取消");
+    drawTextAt(14, 136, tip, COL_SUB, COL_BG);
+    drawBtn(3, 246, 100, 44, "取消", COL_KEY_FN, COL_TEXT);
+    drawBtn(217, 246, 100, 44, "保存", COL_ACCENT, 0xFFFF);
+    return;
+  }
+
+  int contentH = cfgCount() * ITEM_H;
+  int viewH = SCREEN_H - 6 - LIST_TOP;
+  int maxScroll = max(0, contentH - viewH);
+  if (confScroll > maxScroll) confScroll = maxScroll;
+  if (confScroll < 0) confScroll = 0;
+  for (int i = 0; i < cfgCount(); i++)
+  {
+    int iy = LIST_TOP + i * ITEM_H - confScroll;
+    if (iy + ITEM_H < LIST_TOP || iy > SCREEN_H) continue;
+    const CfgItem &it = cfgAt(i);
+    gfx->fillRoundRect(3, iy, 314, ITEM_H - 6, 8, COL_PANEL);
+    drawTextAt(14, iy + 15, it.label, COL_TEXT, COL_PANEL);
+    String t = (it.type == CT_STR) ? "文本" : (it.type == CT_INT) ? "数字"
+                                 : (it.type == CT_BOOL)           ? "开关"
+                                                                  : "选择";
+    drawTextAt(232, iy + 15, t, COL_SUB, COL_PANEL);
+    String v = cfgGetShow(it);
+    if (it.type == CT_BOOL) v = (v == "1") ? "开" : "关";
+    if (!v.length()) v = "未设置";
+    drawTextAt(14, iy + 32, fitTail(v, 296), it.type == CT_BOOL ? (cfgGetRaw(it) == "1" ? COL_OK : COL_SUB) : COL_SUB, COL_PANEL);
+  }
+  drawScrollbar(SCREEN_W - 4, LIST_TOP, viewH, contentH, confScroll);
+}
+
+static void confLeaveEdit(bool save)
+{
+  releaseGuard = true;   // 取消/保存按钮的抬起不许落进下面的列表
+  if (save && confIdx >= 0)
+  {
+    const CfgItem &it = cfgAt(confIdx);
+    String err;
+    if (!cfgSet(it, confDraft, err))
+    {
+      showToast(err, 2600);   // 校验失败留在编辑页，用户可改
+      dirtyFull = true;
+      return;
+    }
+    showToast("已保存");
+    if (!strcmp(it.key, "net.ssid") || !strcmp(it.key, "net.pass"))
+      showToast("已保存，重新连接 WiFi 后生效", 2600);
+  }
+  confIdx = -1;
+  kbReset();
+  kbAttach(&draft);
+  kbSetMask(false);
+  kbSetSendLabel("发送");
+  dirtyFull = true;
+}
+
+// ENUM 选项循环：返回下一项，当前值不在表里则取第一项
+static String confNextEnum(const CfgItem &it)
+{
+  String cur = cfgGetRaw(it);
+  String opts = it.options;
+  String first, next;
+  int i = 0;
+  bool takeNext = (cur.length() == 0);   // 当前没值 → 取第一项
+  while (i <= opts.length())
+  {
+    int p = opts.indexOf('|', i);
+    if (p < 0) p = opts.length();
+    String o = opts.substring(i, p);
+    if (!first.length()) first = o;
+    if (takeNext && o != cur) { next = o; break; }
+    if (o == cur) takeNext = true;
+    i = p + 1;
+  }
+  return next.length() ? next : first;
+}
+
+static void handleConfTouch(bool press, bool release, bool down, int x, int y)
+{
+  if (confIdx >= 0)
+  {
+    if (press)
+    {
+      if (ptIn(x, y, 3, 4, 56, 28)) { confLeaveEdit(false); return; }
+      if (ptIn(x, y, 3, 246, 100, 44)) { confLeaveEdit(false); return; }
+      if (ptIn(x, y, 217, 246, 100, 44)) { confLeaveEdit(true); return; }
+    }
+    uint8_t ev = kbHandle(down, x, y);
+    if (ev & KB_CHANGED) dirtyFull = true;
+    if (ev & KB_SEND) confLeaveEdit(true);
+    return;
+  }
+
+  if (press && ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_SETTINGS); return; }
+
+  if (down && y >= LIST_TOP)
+  {
+    if (!listDragging) { listDragging = true; dragStartY = y; scrollAtDragStart = confScroll; }
+    int dy = y - dragStartY;
+    if (dy)
+    {
+      int viewH = SCREEN_H - 6 - LIST_TOP;
+      int maxScroll = max(0, cfgCount() * ITEM_H - viewH);
+      confScroll = scrollAtDragStart - dy;
+      if (confScroll < 0) confScroll = 0;
+      if (confScroll > maxScroll) confScroll = maxScroll;
+      dirtyFull = true;
+    }
+  }
+  if (!down) listDragging = false;
+
+  if (release && movedDist < 10 && y >= LIST_TOP)
+  {
+    int idx = (y + confScroll - LIST_TOP) / ITEM_H;
+    if (idx >= 0 && idx < cfgCount())
+    {
+      const CfgItem &it = cfgAt(idx);
+      if (it.type == CT_BOOL)
+      {
+        String cur = cfgGetRaw(it);
+        String err;
+        if (cfgSet(it, cur == "1" ? "0" : "1", err))
+          showToast(cfgGetRaw(it) == "1" ? "已开启" : "已关闭");
+        else showToast(err, 2600);
+        dirtyFull = true;
+      }
+      else if (it.type == CT_ENUM)
+      {
+        String nv = confNextEnum(it);
+        String err;
+        if (cfgSet(it, nv, err)) showToast("已设为 " + nv);
+        else showToast(err, 2600);
+        dirtyFull = true;
+      }
+      else
+      {
+        confIdx = idx;
+        kbAttach(&confDraft);
+        kbSetMask((it.flags & CFG_SECRET) != 0);
+        kbSetSendLabel("保存");
+        kbReset();
+        confDraft = cfgGetRaw(it);   // kbReset 会清空绑定缓冲，之后重新赋值
+        dirtyFull = true;
+      }
+    }
+  }
+}
+
 
 static void drawBmsBody()
 {
@@ -505,6 +805,9 @@ static void drawBmsBody()
   {
     drawTextAt(12, 130, "正在搜索 BMS 蓝牙设备..", COL_SUB, COL_BG);
     drawTextAt(12, 158, "请确保电池 BMS 已上电并广播", COL_SUB, COL_BG);
+    drawBtn(3, 190, 314, 40, "重新扫描", COL_ACCENT, 0xFFFF);
+    // 无数据时也必须显示返回按钮，否则进页后出不去
+    drawBtn(3, 440, 314, 40, "返回", COL_KEY_FN, COL_TEXT);
     return;
   }
 
@@ -538,6 +841,9 @@ static void drawBmsBody()
   drawTextAt(96, 356, String(I.cellCount), COL_TEXT, COL_PANEL);
   drawTextAt(12, 378, "平衡电流", COL_SUB, COL_PANEL);
   drawTextAt(96, 378, String(I.balanceCurrent, 2) + " A", COL_TEXT, COL_PANEL);
+
+  // 返回按钮
+  drawBtn(3, 440, 314, 40, "返回", COL_KEY_FN, COL_TEXT);
 }
 
 static void drawRssi(int x, int y, int rssi)
@@ -571,6 +877,7 @@ static void drawWifiBody()
     drawTextAt(232, iy + 27, dbm, COL_SUB, COL_PANEL);
     drawRssi(292, iy + 10, apList[i].rssi);
   }
+  drawScrollbar(SCREEN_W - 4, LIST_TOP, viewH, contentH, wifiScroll);
 }
 
 static void drawWifiPassBody()
@@ -579,7 +886,10 @@ static void drawWifiPassBody()
   drawTextAt(14, 64, "网络:", COL_SUB, COL_PANEL);
   drawTextAt(14, 86, fitTail(selSsid, 180), COL_TEXT, COL_PANEL);
   drawBtn(227, 48, 82, 40, "连接", COL_ACCENT, 0xFFFF);
-  drawTextAt(14, 130, "请在下方输入框输入密码", COL_SUB, COL_BG);
+  if (wifiPassSaved)
+    drawTextAt(14, 130, "已记住密码（明文显示，可直接点连接）", COL_OK, COL_BG);
+  else
+    drawTextAt(14, 130, "请在下方输入框输入密码", COL_SUB, COL_BG);
 }
 
 static void drawApiBody()
@@ -596,23 +906,32 @@ static void drawApiBody()
     drawBtn(217, 246, 100, 44, "保存", COL_ACCENT, 0xFFFF);
     return;
   }
-  struct Card { int y; const char *label; const String *value; bool mask; };
+  // 7 行（行高 46 步进 49）：厂商 / 接口地址 / API Key / 模型名称 / 拉取模型 / 保存 / 返回
   String keyMasked = cfg.key.length() ? cfg.key.substring(0, min(6, (int)cfg.key.length())) + "****" : "未设置";
-  Card cards[3] = {
-    {44, "接口地址", &cfg.url, false},
-    {100, "模型名称", &cfg.model, false},
-    {156, "API Key", &keyMasked, false},
+  String vendorVal = cfgVendorName();
+  {
+    AiRec vr;
+    if (aiRecGet(vendorVal, vr)) vendorVal += " 已存";
+  }
+  struct Card { int y; const char *label; String value; bool accent; };
+  Card cards[7] = {
+    {40, "厂商", vendorVal, false},
+    {89, "接口地址", cfg.url, false},
+    {138, "API Key", keyMasked, false},
+    {187, "模型名称", cfg.model.length() ? cfg.model : String("未设置"), false},
+    {236, "拉取模型列表", "自动获取该厂商模型", false},
+    {285, "保存", cfgVendorName() == "自定义" ? String("保存设置") : String("保存并记住厂商"), true},
+    {334, "返回主页", "", false},
   };
   for (auto &c : cards)
   {
-    gfx->fillRoundRect(3, c.y, 314, 48, 8, COL_PANEL);
-    drawTextAt(14, c.y + 19, c.label, COL_SUB, COL_PANEL);
-    drawTextAt(90, c.y + 19, fitTail(*c.value, 215), COL_TEXT, COL_PANEL);
-    drawTextAt(296, c.y + 19, ">", COL_SUB, COL_PANEL);
+    gfx->fillRoundRect(3, c.y, 314, 46, 8, c.accent ? COL_ACCENT : COL_PANEL);
+    drawTextAt(14, c.y + 18, c.label, c.accent ? 0xFFFF : COL_SUB, c.accent ? COL_ACCENT : COL_PANEL);
+    if (c.value.length())
+      drawTextAt(90, c.y + 18, fitTail(c.value, 215), c.accent ? 0xFFFF : COL_TEXT, c.accent ? COL_ACCENT : COL_PANEL);
+    if (strcmp(c.label, "返回主页") != 0)
+      drawTextAt(296, c.y + 18, ">", c.accent ? 0xFFFF : COL_SUB, c.accent ? COL_ACCENT : COL_PANEL);
   }
-  drawBtn(3, 216, 314, 44, "保存设置", COL_ACCENT, 0xFFFF);
-  drawBtn(3, 264, 155, 36, "预设:云端", COL_KEY_FN, COL_TEXT);
-  drawBtn(162, 264, 155, 36, "预设:本地", COL_KEY_FN, COL_TEXT);
 }
 
 static void drawChatIcon(int cx, int cy)
@@ -657,24 +976,34 @@ static void drawTermIcon(int cx, int cy)
   gfx->fillTriangle(cx + 2, cy - 4, cx + 18, cy + 4, cx + 2, cy + 12, COL_ACCENT);
 }
 
+static void drawBmsIcon(int cx, int cy)
+{
+  uint16_t c = COL_ACCENT;
+  gfx->fillRoundRect(cx - 18, cy - 16, 36, 32, 6, c);
+  gfx->fillRect(cx - 6, cy - 20, 12, 6, c);
+  gfx->fillRect(cx - 14, cy + 10, 28, 4, c);
+  gfx->fillRect(cx - 10, cy + 6, 4, 8, c);
+  gfx->fillRect(cx + 6, cy + 6, 4, 8, c);
+}
+
 static void drawHomeBody()
 {
-  struct Tile { int x; const char *label; void (*icon)(int, int); };
-  Tile tiles[4] = {
-    {6, "聊天", drawChatIcon},
-    {86, "串口", drawTermIcon},
-    {166, "小志", drawMicIcon},
-    {246, "设置", drawGearIcon},
+  struct Tile { int x, y; const char *label; void (*icon)(int, int); };
+  Tile tiles[5] = {
+    {6, 96, "聊天", drawChatIcon},
+    {106, 96, "串口", drawTermIcon},
+    {206, 96, "小志", drawMicIcon},
+    {6, 224, "电池", drawBmsIcon},
+    {106, 224, "设置", drawGearIcon},
   };
   for (auto &t : tiles)
   {
-    gfx->fillRoundRect(t.x, 96, 72, 118, 14, COL_PANEL);
-    gfx->drawRoundRect(t.x, 96, 72, 118, 14, COL_LINE);
-    t.icon(t.x + 36, 142);
+    gfx->fillRoundRect(t.x, t.y, 94, 118, 14, COL_PANEL);
+    gfx->drawRoundRect(t.x, t.y, 94, 118, 14, COL_LINE);
+    t.icon(t.x + 47, t.y + 48);
     int tw = textWidth(t.label);
-    drawTextAt(t.x + (72 - tw) / 2, 196, t.label, COL_TEXT, COL_PANEL);
+    drawTextAt(t.x + (94 - tw) / 2, t.y + 100, t.label, COL_TEXT, COL_PANEL);
   }
-  drawTextAt(14, 260, "更多应用敬请期待", COL_SUB, COL_BG);
 }
 
 static void drawSerialBody()
@@ -715,6 +1044,7 @@ static void drawSerialBody()
     if (ly + LINE_H > cb - 4) break;
     drawTextAt(10, ly + 17, termLines[i], termTx[i] ? COL_ACCENT : COL_TEXT, COL_PANEL);
   }
+  drawScrollbar(SCREEN_W - 5, TERM_TOP + 4, viewH - 8, (int)termLines.size() * LINE_H, serialScroll);
 }
 
 static void drawFramesBody()
@@ -736,6 +1066,7 @@ static void drawFramesBody()
     String body = flHexMode ? f.hex : f.text;
     drawTextAt(12, iy + 32, fitTail(body.length() ? body : (flHexMode ? "(空)" : "(无可打印内容)"), 296), COL_SUB, COL_PANEL);
   }
+  drawScrollbar(SCREEN_W - 4, LIST_TOP, viewH, contentH, framesScroll);
 }
 
 static void drawAnaBody()
@@ -780,6 +1111,7 @@ static void drawAnaBody()
       if (ly + LINE_H > ANS_BOT - 4) break;
       drawTextAt(10, ly + 17, anaLines[i], COL_TEXT, COL_PANEL);
     }
+    drawScrollbar(SCREEN_W - 5, ANS_TOP + 4, viewH - 8, (int)anaLines.size() * LINE_H, anaScroll);
   }
   drawBtn(3, SCREEN_H - 48, 150, 40, "重新分析", COL_ACCENT, 0xFFFF);
   drawBtn(162, SCREEN_H - 48, 155, 40, "返回报文记录", COL_KEY_FN, COL_TEXT);
@@ -817,11 +1149,20 @@ static void drawBody()
   case S_OTA:
     drawOtaBody();
     break;
+  case S_STATUS:
+    drawStatusBody();
+    break;
   case S_OTAURL:
     drawOtaUrlBody();
     break;
   case S_BMS:
     drawBmsBody();
+    break;
+  case S_CONF:
+    drawConfBody();
+    break;
+  case S_MODELS:
+    drawModelsBody();
     break;
   case S_CHAT:
     chatRender(CHAT_TOP, chatViewBot() - CHAT_TOP, chatScroll, aiBusy(), lastBusyPhase % 3);
@@ -874,7 +1215,7 @@ static void drawConnectingOverlay()
 
 static bool kbVisible()
 {
-  return scr == S_CHAT || scr == S_WIFIPASS || (scr == S_API && editField >= 0) || scr == S_SERIAL || scr == S_OTAURL;
+  return scr == S_CHAT || scr == S_WIFIPASS || (scr == S_API && editField >= 0) || scr == S_SERIAL || scr == S_OTAURL || (scr == S_CONF && confIdx >= 0);
 }
 
 static bool inputLineVisible()
@@ -984,19 +1325,22 @@ static void handleChatTouch(bool press, bool release, bool down, int x, int y)
 static void handleSettingsTouch(bool press, int x, int y)
 {
   if (!press) return;
-  if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_HOME); return; }
-  if (ptIn(x, y, 3, 42, 314, 58)) { scanStart(); gotoScreen(S_WIFI); return; }
-  if (ptIn(x, y, 3, 110, 314, 58)) { gotoScreen(S_API); return; }
-  if (ptIn(x, y, 3, 178, 314, 58)) { gotoScreen(S_OTA); return; }
-  if (ptIn(x, y, 3, 246, 314, 58)) { dlgClear = true; dirtyFull = true; return; }
-  if (ptIn(x, y, 3, 314, 314, 58))
+  if (ptIn(x, y, 3, 4, 56, 28)) { releaseGuard = true; gotoScreen(S_HOME); return; }
+  if (ptIn(x, y, 3, 40, 314, 46)) { releaseGuard = true; scanStart(); gotoScreen(S_WIFI); return; }
+  if (ptIn(x, y, 3, 89, 314, 46)) { releaseGuard = true; gotoScreen(S_API); return; }
+  if (ptIn(x, y, 3, 138, 314, 46)) { releaseGuard = true; gotoScreen(S_BMS); return; }
+  if (ptIn(x, y, 3, 187, 314, 46)) { releaseGuard = true; gotoScreen(S_OTA); return; }
+  if (ptIn(x, y, 3, 236, 314, 46)) { releaseGuard = true; gotoScreen(S_STATUS); return; }
+  if (ptIn(x, y, 3, 285, 314, 46)) { releaseGuard = true; confScroll = 0; gotoScreen(S_CONF); return; }
+  if (ptIn(x, y, 3, 334, 314, 46)) { dlgClear = true; dirtyFull = true; return; }
+  if (ptIn(x, y, 3, 383, 314, 46))
   {
     showToast("正在重启...");
     gfx->flush();
     delay(500);
     ESP.restart();
   }
-  if (ptIn(x, y, 3, 382, 314, 58)) { gotoScreen(S_CHAT); }
+  if (ptIn(x, y, 3, 432, 314, 46)) { gotoScreen(S_HOME); }
 }
 
 static void handleWifiTouch(bool press, bool release, bool down, int x, int y)
@@ -1028,11 +1372,14 @@ static void handleWifiTouch(bool press, bool release, bool down, int x, int y)
     if (idx >= 0 && idx < (int)apList.size())
     {
       selSsid = apList[idx].ssid;
+      kbAttach(&passDraft);
       kbReset();
-      kbAttach(&draft);
-      kbSetMask(true);
+      String saved;
+      wifiPassSaved = wifiRecGet(selSsid, saved);
+      kbSetMask(!wifiPassSaved);   // 已记住：明文显示（可查看密码）；否则打码输入
       kbSetSendLabel("完成");
       gotoScreen(S_WIFIPASS);
+      if (wifiPassSaved) passDraft = saved;   // kbReset 之后回填记住的密码
     }
   }
 }
@@ -1044,18 +1391,20 @@ static void handleWifiPassTouch(bool press, bool down, int x, int y)
   {
     if (ptIn(x, y, 3, 4, 56, 28))
     {
+      releaseGuard = true;
+      kbReset();
+      kbAttach(&draft);
       kbSetMask(false);
       kbSetSendLabel("发送");
-      kbReset();
       gotoScreen(S_WIFI);
       return;
     }
     if (ptIn(x, y, 227, 48, 82, 40))
     {
-      String pw = draft;
+      String pw = passDraft;
       pw.trim();
       if (!pw.length()) { showToast("请输入密码"); return; }
-      draft.clear();
+      passDraft.clear();
       dirtyInput = true;
       startWifiConnect(selSsid, pw);
       dirtyFull = true;
@@ -1067,14 +1416,139 @@ static void handleWifiPassTouch(bool press, bool down, int x, int y)
   if (ev & KB_CHANGED) dirtyInput = true;
   if (ev & KB_SEND)
   {
-    String pw = draft;
+    String pw = passDraft;
     pw.trim();
     if (pw.length())
     {
-      draft.clear();
+      passDraft.clear();
       dirtyInput = true;
       startWifiConnect(selSsid, pw);
       dirtyFull = true;
+    }
+  }
+}
+
+// AI 厂商循环切换：切换即套用预置 URL，并从记录恢复 key/model/模型列表
+static void apiVendorCycle()
+{
+  int vi = cfgIndexOf("ai.vendor");
+  if (vi < 0) return;
+  const CfgItem &it = cfgAt(vi);
+  String opts = it.options;
+  String cur = cfgGetRaw(it);
+  String next;
+  int i = 0;
+  bool takeNext = false;
+  while (i <= opts.length())
+  {
+    int p = opts.indexOf('|', i);
+    if (p < 0) p = opts.length();
+    String o = opts.substring(i, p);
+    if (takeNext) { next = o; break; }
+    if (o == cur) takeNext = true;
+    i = p + 1;
+  }
+  if (!next.length())
+  {
+    int fp = opts.indexOf('|');
+    next = fp < 0 ? opts : opts.substring(0, fp);
+  }
+  String err;
+  if (cfgSet(it, next, err))
+    showToast("厂商: " + next + (next != "自定义" ? "（自动填地址/密钥）" : ""), 2200);
+  else showToast(err, 2600);
+  dirtyFull = true;
+}
+
+// 拉取当前厂商的模型列表；manualFallback=失败时进入键盘手动输入模型
+static void apiFetchModels(bool manualFallback)
+{
+  if (!wifiUp()) { showToast("请先连接 WiFi", 2200); return; }
+  if (!cfg.key.length()) { showToast("请先填 API Key", 2200); return; }
+  showToast("拉取模型中...", 3000);
+  dirtyFull = true;
+  String ms, err;
+  if (aiFetchModels(cfg.url, cfg.key, ms, err))
+  {
+    cfgSetModels(ms);
+    String vn = cfgVendorName();
+    if (vn != "自定义")
+    {
+      AiRec r{vn, cfg.url, cfg.key, cfg.model, ms};
+      aiRecUpsert(r);
+    }
+    modelsScroll = 0;
+    gotoScreen(S_MODELS);
+  }
+  else
+  {
+    showToast("拉取失败: " + err, 2800);
+    if (manualFallback) enterEdit(1);   // 兜底：键盘手动填模型名
+  }
+}
+
+// S_MODELS：模型列表（来自拉取或切厂商记录恢复），点选即用
+static void drawModelsBody()
+{
+  int cnt = modelsCount();
+  if (!cnt)
+  {
+    drawTextAt(14, 130, "暂无模型列表，回到上一页点「拉取模型列表」", COL_SUB, COL_BG);
+    return;
+  }
+  int contentH = cnt * ITEM_H;
+  int viewH = SCREEN_H - 6 - LIST_TOP;
+  int maxScroll = max(0, contentH - viewH);
+  if (modelsScroll > maxScroll) modelsScroll = maxScroll;
+  if (modelsScroll < 0) modelsScroll = 0;
+  for (int i = 0; i < cnt; i++)
+  {
+    int iy = LIST_TOP + i * ITEM_H - modelsScroll;
+    if (iy + ITEM_H < LIST_TOP || iy > SCREEN_H) continue;
+    String id = modelsAt(i);
+    bool cur = (id == cfg.model);
+    gfx->fillRoundRect(3, iy, 314, ITEM_H - 6, 8, cur ? COL_ACCENT : COL_PANEL);
+    drawTextAt(14, iy + 24, fitTail(id, 290), cur ? 0xFFFF : COL_TEXT, cur ? COL_ACCENT : COL_PANEL);
+    if (cur) drawTextAt(270, iy + 24, "使用中", 0xFFFF, COL_ACCENT);
+  }
+  drawScrollbar(SCREEN_W - 4, LIST_TOP, viewH, contentH, modelsScroll);
+}
+
+static void handleModelsTouch(bool press, bool release, bool down, int x, int y)
+{
+  if (press && ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_API); return; }
+
+  if (down && y >= LIST_TOP)
+  {
+    if (!listDragging) { listDragging = true; dragStartY = y; scrollAtDragStart = modelsScroll; }
+    int dy = y - dragStartY;
+    if (dy)
+    {
+      int viewH = SCREEN_H - 6 - LIST_TOP;
+      int maxScroll = max(0, modelsCount() * ITEM_H - viewH);
+      modelsScroll = scrollAtDragStart - dy;
+      if (modelsScroll < 0) modelsScroll = 0;
+      if (modelsScroll > maxScroll) modelsScroll = maxScroll;
+      dirtyFull = true;
+    }
+  }
+  if (!down) listDragging = false;
+
+  if (release && movedDist < 10 && y >= LIST_TOP)
+  {
+    int idx = (y + modelsScroll - LIST_TOP) / ITEM_H;
+    if (idx >= 0 && idx < modelsCount())
+    {
+      cfg.model = modelsAt(idx);
+      cfgSaveApi();
+      String vn = cfgVendorName();
+      if (vn != "自定义")
+      {
+        AiRec r{vn, cfg.url, cfg.key, cfg.model, cfgModels()};
+        aiRecUpsert(r);
+      }
+      showToast("已选 " + cfg.model);
+      gotoScreen(S_API);
     }
   }
 }
@@ -1085,6 +1559,7 @@ static void handleApiTouch(bool press, bool down, int x, int y)
   {
     if (press)
     {
+      if (ptIn(x, y, 3, 4, 56, 28)) { exitEdit(false); return; }
       if (ptIn(x, y, 3, 246, 100, 44)) { exitEdit(false); return; }
       if (ptIn(x, y, 217, 246, 100, 44)) { exitEdit(true); return; }
     }
@@ -1095,28 +1570,26 @@ static void handleApiTouch(bool press, bool down, int x, int y)
   }
   if (!press) return;
   if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_SETTINGS); return; }
-  if (ptIn(x, y, 3, 44, 314, 48)) { enterEdit(0); return; }
-  if (ptIn(x, y, 3, 100, 314, 48)) { enterEdit(1); return; }
-  if (ptIn(x, y, 3, 156, 314, 48)) { enterEdit(2); return; }
-  if (ptIn(x, y, 3, 216, 314, 44)) { cfgSaveApi(); showToast("已保存"); return; }
-  if (ptIn(x, y, 3, 264, 155, 36))
+  if (ptIn(x, y, 3, 40, 314, 46)) { apiVendorCycle(); return; }
+  if (ptIn(x, y, 3, 89, 314, 46)) { enterEdit(0); return; }   // 接口地址
+  if (ptIn(x, y, 3, 138, 314, 46)) { enterEdit(2); return; }  // API Key
+  if (ptIn(x, y, 3, 187, 314, 46)) { apiFetchModels(true); return; }  // 模型：有列表选列表，没有就拉
+  if (ptIn(x, y, 3, 236, 314, 46)) { apiFetchModels(false); return; } // 拉取模型列表
+  if (ptIn(x, y, 3, 285, 314, 46))
   {
-    cfg.url = "https://api.deepseek.com";
-    cfg.model = "deepseek-chat";
     cfgSaveApi();
-    showToast("已切换云端 DeepSeek");
+    String vn = cfgVendorName();
+    if (vn != "自定义")
+    {
+      AiRec r{vn, cfg.url, cfg.key, cfg.model, cfgModels()};
+      aiRecUpsert(r);
+      showToast("已保存，下次切回直接用");
+    }
+    else showToast("已保存");
     dirtyFull = true;
     return;
   }
-  if (ptIn(x, y, 162, 264, 155, 36))
-  {
-    cfg.url = DEFAULT_URL;
-    cfg.model = DEFAULT_MODEL;
-    cfgSaveApi();
-    showToast("已切换本地服务");
-    dirtyFull = true;
-    return;
-  }
+  if (ptIn(x, y, 3, 334, 314, 46)) { gotoScreen(S_SETTINGS); }
 }
 
 static void handleDialogTouch(bool press, int x, int y)
@@ -1233,10 +1706,11 @@ static void handleOtaTouch(bool press, bool down, int x, int y)
     }
     if (ptIn(x, y, 163, 338, 154, 44))
     {
-      kbAttach(&otaUrl);
+      kbAttach(&otaUrlEdit);
       kbSetMask(false);
       kbSetSendLabel("保存");
       kbReset();
+      otaUrlEdit = otaUrl;    // kbReset 会清空绑定缓冲，之后重新赋值
       gotoScreen(S_OTAURL);
       return;
     }
@@ -1264,58 +1738,83 @@ static void handleOtaTouch(bool press, bool down, int x, int y)
   }
 }
 
+static void leaveOtaUrl()
+{
+  // 先重置键盘（清空当前绑定的编辑缓冲），再绑回聊天草稿，避免清掉用户输入
+  kbReset();
+  kbAttach(&draft);
+  kbSetSendLabel("发送");
+  dirtyFull = true;
+}
+
+static void otaUrlCommit(bool alsoStart)
+{
+  otaUrlEdit.trim();
+  otaUrl = otaUrlEdit;
+  cfg.otaUrl = otaUrl;
+  cfgSaveOtaUrl();
+  leaveOtaUrl();
+  gotoScreen(S_OTA);
+  if (!alsoStart)
+  {
+    showToast("地址已保存");
+    return;
+  }
+  if (!wifiUp())
+  {
+    showToast("未联网，请先配置 WiFi", 2600);
+    return;
+  }
+  if (otaWebStart(otaUrl)) showToast("已开始 URL 升级", 1500);
+  else showToast(otaMessage().length() ? otaMessage() : "无法开始升级", 2600);
+  dirtyFull = true;
+}
+
 static void handleOtaUrlTouch(bool press, bool down, int x, int y)
 {
   if (press)
   {
-    if (ptIn(x, y, 3, 4, 56, 28))
+    if (ptIn(x, y, 3, 4, 56, 28) || ptIn(x, y, 3, 246, 100, 44))
     {
-      kbAttach(&draft);
-      kbSetSendLabel("发送");
+      leaveOtaUrl();      // 返回：丢弃这次编辑
       gotoScreen(S_OTA);
       return;
     }
-    if (ptIn(x, y, 3, 246, 100, 44))
+    if (ptIn(x, y, 110, 246, 100, 44))
     {
-      kbAttach(&draft);
-      kbSetSendLabel("发送");
-      gotoScreen(S_OTA);
+      otaUrlCommit(false);
       return;
     }
     if (ptIn(x, y, 217, 246, 100, 44))
     {
-      otaUrl.trim();
-      kbAttach(&draft);
-      kbSetSendLabel("发送");
-      gotoScreen(S_OTA);
-      showToast("地址已保存");
+      otaUrlCommit(true);
       return;
     }
   }
   uint8_t ev = kbHandle(down, x, y);
   if (ev & KB_LAYOUT) { dirtyFull = true; return; }
   if (ev & KB_CHANGED) dirtyFull = true;
-  if (ev & KB_SEND)
-  {
-    otaUrl.trim();
-    kbAttach(&draft);
-    kbSetSendLabel("发送");
-    gotoScreen(S_OTA);
-    showToast("地址已保存");
-  }
+  if (ev & KB_SEND) otaUrlCommit(false);
+}
+
+static void handleStatusTouch(bool press, int x, int y)
+{
+  if (press && ptIn(x, y, 3, 4, 56, 28)) gotoScreen(S_SETTINGS);
 }
 
 static void handleHomeTouch(bool press, int x, int y)
 {
   if (!press) return;
-  if (ptIn(x, y, 6, 96, 72, 118)) { gotoScreen(S_CHAT); return; }
-  if (ptIn(x, y, 86, 96, 72, 118)) { serialScroll = 0; gotoScreen(S_SERIAL); return; }
-  if (ptIn(x, y, 166, 96, 72, 118)) { gotoScreen(S_XIAOZHI); return; }
-  if (ptIn(x, y, 246, 96, 72, 118)) { gotoScreen(S_SETTINGS); return; }
+  if (ptIn(x, y, 6, 96, 94, 118)) { gotoScreen(S_CHAT); return; }
+  if (ptIn(x, y, 106, 96, 94, 118)) { serialScroll = 0; gotoScreen(S_SERIAL); return; }
+  if (ptIn(x, y, 206, 96, 94, 118)) { gotoScreen(S_XIAOZHI); return; }
+  if (ptIn(x, y, 6, 224, 94, 118)) { gotoScreen(S_BMS); return; }
+  if (ptIn(x, y, 106, 224, 94, 118)) { gotoScreen(S_SETTINGS); return; }
 }
 
 static void routeTouch(bool press, bool release, bool down, int x, int y)
 {
+  if (release && releaseGuard) { releaseGuard = false; return; } // 跳页/退出编辑当帧吞掉抬起
   if (dlgClear) { handleDialogTouch(press, x, y); return; }
   switch (scr)
   {
@@ -1329,7 +1828,16 @@ static void routeTouch(bool press, bool release, bool down, int x, int y)
   case S_AIANA: handleAnaTouch(press, down, x, y); break;
   case S_OTA: handleOtaTouch(press, down, x, y); break;
   case S_OTAURL: handleOtaUrlTouch(press, down, x, y); break;
-  case S_BMS: break;
+  case S_STATUS: handleStatusTouch(press, x, y); break;
+  case S_CONF: handleConfTouch(press, release, down, x, y); break;
+  case S_MODELS: handleModelsTouch(press, release, down, x, y); break;
+  case S_BMS:
+    if (press) {
+      if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_HOME); return; }
+      if (ptIn(x, y, 3, 440, 314, 40)) { gotoScreen(S_HOME); return; }
+      if (!bms::hasData() && ptIn(x, y, 3, 190, 314, 40)) { bms::begin(); }
+    }
+    break;
   case S_SETTINGS: handleSettingsTouch(press, x, y); break;
   case S_WIFI: handleWifiTouch(press, release, down, x, y); break;
   case S_WIFIPASS: handleWifiPassTouch(press, down, x, y); break;
@@ -1347,12 +1855,18 @@ void setup()
   Serial0.begin(115200);
   Serial.begin(115200);
   delay(300);
+  logTeeBegin();
   BOOTLOG("\n[boot] setup enter rst=%d\n", (int)esp_reset_reason());
   STK("enter");
   cfgLoad();
+  cfgInit();    // 配置表：生成网页 PIN、载入新增设置项
+  otaUrl = cfg.otaUrl;
   BOOTLOG("[boot] stage: cfg ok\n");
+
   ui_init();
   BOOTLOG("[boot] stage: ui ok\n");
+  drawSplash("正在启动...");
+  otaSdUpdate();
   touchInit();
   aiBegin();
   flBegin();
@@ -1360,12 +1874,19 @@ void setup()
   STK("ai");
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
+  drawSplash("初始化电池监测...");
   bms::begin();
   STK("wifi-mode");
-  slBegin("ESP32-S3-AI");
+  drawSplash("启动串口服务...");
+  slBegin("ESP32-S3-AI");     // 建 server + NUS 服务（不广播）
   STK("ble");
-  otaBegin();
-  BOOTLOG("[boot] stage: ble ota ok\n");
+  drawSplash("启动 OTA...");
+  otaBleBegin();              // 建蓝牙 OTA 服务（不广播）
+  BOOTLOG("[boot] stage: ble svc ok=%d\n", (int)otaBleReady());
+  otaBegin();                 // ArduinoOTA（网络推送）
+  otaHttpBegin();             // WiFi 推送升级（网页 POST 固件到 8080）
+  slStartAdv();               // 所有 GATT 服务就位后再开广播
+  BOOTLOG("[boot] stage: ble adv ok\n");
   STK("ota");
   kbAttach(&draft);
   kbSetSendLabel("发送");
@@ -1378,7 +1899,7 @@ void setup()
     drawSplash("正在连接 " + cfg.ssid);
     WiFi.begin(cfg.ssid.c_str(), cfg.wpass.c_str());
     uint32_t t0 = millis();
-    while (millis() - t0 < 12000)
+    while (millis() - t0 < 5000)
     {
       if (WiFi.status() == WL_CONNECTED) { ok = true; break; }
       delay(150);
@@ -1428,6 +1949,7 @@ void loop()
   serviceWifiConnect();
   slPoll();
   otaPoll();
+  otaHttpPoll();   // 把 WiFi 升级地址同步到蓝牙"信息"特征，网页据此自动填 IP
   bms::poll();
 
   uint8_t os = (uint8_t)otaState();
@@ -1437,6 +1959,17 @@ void loop()
     lastOtaState = os;
     lastOtaPct = op;
     if (scr == S_OTA) dirtyFull = true;
+  }
+
+  // 设备状态页：每 500ms 刷新一次（蓝牙连接/广播、升级进度都是实时变的）
+  if (scr == S_STATUS)
+  {
+    static uint32_t lastStatMs = 0;
+    if (millis() - lastStatMs > 500)
+    {
+      lastStatMs = millis();
+      dirtyFull = true;
+    }
   }
 
   if (frames.size() != lastFrameCount)

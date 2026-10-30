@@ -1,4 +1,5 @@
 #include "bms_client.h"
+#include "serial_link.h"
 #include <NimBLEClient.h>
 #include <NimBLEAdvertisedDevice.h>
 #include <NimBLEUtils.h>
@@ -84,8 +85,23 @@ bool begin()
   return true;
 }
 
+static bool wasDown = false;
+
 void poll()
 {
+  if (slBleDown()) { wasDown = true; return; }   // TLS 握手期间 BLE 栈已释放，避免踩空指针
+  if (wasDown)   // BLE 栈刚重建：旧 client/特征指针已随旧栈释放，重置后自动重连
+  {
+    wasDown = false;
+    client = nullptr;
+    connectedFlag = false;
+    hasDataFlag = false;
+    notifyChar = nullptr;
+    writeChar = nullptr;
+    scanRequested = false;
+    client = NimBLEDevice::createClient();
+    client->setClientCallbacks(&clientCb);
+  }
   if (!client) return;
 
   if (!connectedFlag)

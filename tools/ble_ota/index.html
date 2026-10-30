@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32-S3 设备控制台</title>
+<style>
+  :root{
+    --bg:#070d18; --panel:#111a2b; --panel2:#16233a; --line:#22314d;
+    --text:#e8eef8; --sub:#8fa3c0; --accent:#2f7dff; --accent2:#1b5fd8;
+    --ok:#33d17a; --warn:#ffb020; --err:#ff5d6c;
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; min-height:100vh; background:radial-gradient(1200px 600px at 50% -10%,#12233f 0%,var(--bg) 55%);
+    color:var(--text); font:15px/1.6 system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+    display:flex; justify-content:center; padding:28px 16px 48px;
+  }
+  .wrap{width:100%; max-width:760px}
+  h1{font-size:22px; margin:0 0 4px; letter-spacing:.5px}
+  .lead{color:var(--sub); margin:0 0 22px; font-size:13px}
+  .card{background:linear-gradient(180deg,var(--panel) 0%,var(--panel2) 100%); border:1px solid var(--line);
+        border-radius:16px; padding:18px; margin-bottom:16px; box-shadow:0 12px 30px rgba(0,0,0,.25)}
+  .row{display:flex; gap:12px; flex-wrap:wrap; align-items:center}
+  .grow{flex:1; min-width:180px}
+  button{
+    appearance:none; border:0; border-radius:10px; padding:11px 18px; font-size:14px; font-weight:600;
+    color:#fff; background:linear-gradient(180deg,var(--accent) 0%,var(--accent2) 100%); cursor:pointer;
+    transition:filter .15s, opacity .15s;
+  }
+  button:hover:not(:disabled){filter:brightness(1.1)}
+  button:disabled{opacity:.4; cursor:not-allowed}
+  button.ghost{background:#1d2b45; border:1px solid var(--line); color:var(--text)}
+  button.danger{background:linear-gradient(180deg,#e0455a,#b52b3d)}
+  .pill{display:inline-flex; align-items:center; gap:7px; padding:5px 12px; border-radius:999px;
+        background:#0d1728; border:1px solid var(--line); color:var(--sub); font-size:12.5px}
+  .dot{width:8px; height:8px; border-radius:50%; background:var(--sub); box-shadow:0 0 0 3px rgba(143,163,192,.12)}
+  .dot.on{background:var(--ok); box-shadow:0 0 0 3px rgba(51,209,122,.15)}
+  .dot.busy{background:var(--warn); box-shadow:0 0 0 3px rgba(255,176,32,.15); animation:pulse 1.2s infinite}
+  @keyframes pulse{50%{opacity:.35}}
+  .drop{
+    border:2px dashed var(--line); border-radius:14px; padding:22px; text-align:center; cursor:pointer;
+    transition:border-color .15s, background .15s; background:#0b1424;
+  }
+  .drop:hover,.drop.over{border-color:var(--accent); background:#0d1a30}
+  .drop b{display:block; margin-bottom:4px}
+  .drop span{color:var(--sub); font-size:12.5px}
+  .file{margin-top:12px; font-size:13px; color:var(--sub); word-break:break-all}
+  .bar{height:14px; border-radius:999px; background:#0b1424; border:1px solid var(--line); overflow:hidden; margin:12px 0 8px}
+  .bar > i{display:block; height:100%; width:0; border-radius:999px;
+           background:linear-gradient(90deg,#2f7dff,#49c2ff); transition:width .2s}
+  .stats{display:flex; justify-content:space-between; font-size:12.5px; color:var(--sub)}
+  .log{height:168px; overflow:auto; background:#060b14; border:1px solid var(--line); border-radius:12px;
+       padding:10px 12px; font:12.5px/1.65 ui-monospace,Consolas,"Courier New",monospace; color:#a9bdd8; white-space:pre-wrap}
+  .log .ok{color:var(--ok)} .log .err{color:var(--err)} .log .warn{color:var(--warn)} .log .ts{color:#50637f}
+  .hint{font-size:12.5px; color:var(--sub)}
+  ol{margin:8px 0 0; padding-left:20px; color:var(--sub); font-size:13px}
+  code{background:#0b1424; border:1px solid var(--line); border-radius:6px; padding:1px 6px; font-size:12.5px}
+  .banner{border-radius:12px; padding:11px 14px; font-size:13px; margin-bottom:16px; display:none}
+  .banner.show{display:block}
+  input{background:#0b1424;border:1px solid var(--line);border-radius:10px;color:var(--text);
+        padding:10px 12px;font-size:14px;width:100%}
+  input:focus{outline:none;border-color:var(--accent)}
+  .banner.err{background:rgba(255,93,108,.12); border:1px solid rgba(255,93,108,.4); color:#ffb9c0}
+  .banner.ok{background:rgba(51,209,122,.1); border:1px solid rgba(51,209,122,.35); color:#a8efc7}
+  /* ---- tab 栏（推送升级 / 设备设置 / 设备状态） ---- */
+  .tabs{display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap}
+  .tab{background:#1d2b45; border:1px solid var(--line); color:var(--sub); font-weight:600}
+  .tab.on{background:linear-gradient(180deg,var(--accent) 0%,var(--accent2) 100%); color:#fff; border-color:transparent}
+  /* ---- 设备设置（按 /api/settings 的 schema 渲染） ---- */
+  .cfgGroup{font-size:14px; margin:2px 0 10px; color:var(--text)}
+  .cfgItem{border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin:10px 0; background:#0b1424}
+  .cfgItem .lbl{display:flex; justify-content:space-between; gap:10px; font-size:13.5px; margin-bottom:8px}
+  .cfgItem .lbl b{font-weight:600}
+  .cfgItem .lbl code{font-size:11.5px; color:#50637f; background:#0d1728}
+  .cfgItem .msg{font-size:12px; margin-top:6px; color:var(--sub); min-height:1em; word-break:break-all}
+  .cfgItem .msg.ok{color:var(--ok)} .cfgItem .msg.err{color:var(--err)}
+  .cfgItem select{background:#0b1424;border:1px solid var(--line);border-radius:10px;color:var(--text);
+        padding:10px 12px;font-size:14px;width:100%}
+  .cfgItem select:focus{outline:none;border-color:var(--accent)}
+  .cfgItem input[type=number]{width:100%}
+  .cfgRow{display:flex; gap:10px; align-items:center}
+  .cfgRow .grow{flex:1}
+  .cfgRow button{padding:9px 14px}
+  /* ---- 设备状态（1 秒轮询） ---- */
+  .statGrid{display:grid; grid-template-columns:1fr 1fr; gap:10px}
+  @media (max-width:560px){.statGrid{grid-template-columns:1fr}}
+  .statCell{border:1px solid var(--line); border-radius:12px; padding:10px 14px; background:#0b1424}
+  .statCell .k{font-size:12px; color:var(--sub)}
+  .statCell .v{font-size:15px; font-weight:600; word-break:break-all; margin-top:2px}
+  .statCell .v.ok{color:var(--ok)} .statCell .v.warn{color:var(--warn)} .statCell .v.err{color:var(--err)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>ESP32-S3 设备控制台</h1>
+  <p class="lead">推送升级走蓝牙 / WiFi 直传固件；设备设置与设备状态通过设备 8080 端口的 HTTP 接口实时同步。</p>
+
+  <div id="banner" class="banner"></div>
+
+  <div class="tabs">
+    <button class="tab on" id="tabPush">推送升级</button>
+    <button class="tab" id="tabConf">设备设置</button>
+    <button class="tab" id="tabStat">设备状态</button>
+  </div>
+
+  <div id="pagePush">
+  <div class="card">
+    <div class="row">
+      <div class="grow">
+        <div class="pill"><span id="dot" class="dot"></span><span id="devName">未连接</span></div>
+      </div>
+      <button id="btnConnect">连接设备</button>
+      <button id="btnDisconnect" class="ghost" disabled>断开</button>
+    </div>
+    <p class="hint" style="margin:12px 0 0">设备名：<code>ESP32-S3-AI</code> · 需要 Chrome / Edge（电脑或安卓手机）</p>
+  </div>
+
+  <div class="card">
+    <div id="drop" class="drop">
+      <b>点击选择 firmware.bin</b>
+      <span>或把文件拖到这里 · 必须是 PlatformIO 的 firmware.bin，不是 factory.bin</span>
+      <input id="file" type="file" accept=".bin" hidden>
+    </div>
+    <div id="fileInfo" class="file">未选择文件</div>
+
+    <div class="bar"><i id="bar"></i></div>
+    <div class="stats">
+      <span id="pct">0%</span>
+      <span id="speed">—</span>
+      <span id="size">—</span>
+    </div>
+
+    <div class="row" style="margin-top:14px">
+      <button id="btnStart" disabled>开始升级</button>
+      <button id="btnCancel" class="danger" disabled>取消</button>
+      <span id="state" class="hint">等待连接</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <b style="font-size:14px">WiFi 推送升级（快很多，推荐）</b>
+    <p class="hint" style="margin:6px 0 0">连接蓝牙后会自动填入设备 IP；连不上蓝牙也可以手动填（设备上：设置 → 设备状态 → 本机 IP）。</p>
+    <div class="row" style="margin-top:12px">
+      <div class="grow"><input id="ip" placeholder="设备 IP 或 esp32-ai-s3.local" inputmode="text"></div>
+      <button id="btnFind" class="ghost">自动查找</button>
+      <button id="btnWifi" disabled>通过 WiFi 推送</button>
+    </div>
+    <div id="findMsg" class="hint" style="margin-top:8px">点「自动查找」会先试 mDNS 主机名，再扫常见网段的 8080 端口。</div>
+    <div class="bar" style="margin-top:14px"><i id="wbar"></i></div>
+    <div class="stats">
+      <span id="wpct">0%</span>
+      <span id="wspeed">—</span>
+      <span id="wstate" class="hint">未开始</span>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="log" id="log"></div>
+  </div>
+
+  <div class="card">
+    <b style="font-size:14px">使用步骤</b>
+    <ol>
+      <li>设备开机，确认屏幕右上角蓝牙已启动（设备名 <code>ESP32-S3-AI</code>）。</li>
+      <li>点「连接设备」，在弹窗里选择 ESP32-S3-AI。</li>
+      <li>选择 <code>firmware.bin</code>，点「开始升级」，等待进度到 100%。</li>
+      <li>设备会自动重启；若没有，手动按一下 RESET。升级期间不要关闭页面。</li>
+    </ol>
+    <p class="hint" style="margin:10px 0 0">若页面无法打开蓝牙：请用 <code>http://localhost</code> 访问，或使用支持 Web Bluetooth 的浏览器。</p>
+  </div>
+  </div><!-- /pagePush -->
+
+  <div id="pageConf" hidden>
+    <div class="card">
+      <div class="row">
+        <div class="grow"><input id="cip" placeholder="设备 IP（与推送升级页共用）" inputmode="text"></div>
+        <button id="cLoad" class="ghost">加载设置</button>
+      </div>
+      <div class="row" id="pinRow" style="margin-top:10px; display:none">
+        <div class="grow"><input id="pinIn" placeholder="设备 PIN（开启 PIN 后显示在设备状态页）" inputmode="numeric" maxlength="4"></div>
+      </div>
+      <div id="confMsg" class="hint" style="margin-top:8px">填好设备 IP 后点「加载设置」，表单由固件配置表自动生成。</div>
+    </div>
+    <div id="confList"></div>
+  </div><!-- /pageConf -->
+
+  <div id="pageStat" hidden>
+    <div class="card">
+      <div class="row">
+        <div class="grow"><input id="sip" placeholder="设备 IP（与推送升级页共用）" inputmode="text"></div>
+        <button id="sStart" class="ghost">开始刷新</button>
+        <button id="sStop" class="ghost" disabled>停止</button>
+      </div>
+      <div id="statMsg" class="hint" style="margin-top:8px">每 1 秒轮询一次设备状态接口。</div>
+    </div>
+    <div class="card">
+      <div id="statGrid" class="statGrid"></div>
+      <div class="row" style="margin-top:10px">
+        <button id="logBtn" class="ghost">查看日志</button>
+        <button id="logClear" class="ghost">清空日志</button>
+        <div class="hint grow" id="logMsg">固件内置 32KB 日志环形缓冲，也可直接访问 http://设备IP:8080/api/logs</div>
+      </div>
+      <pre id="logBox" hidden style="max-height:300px;overflow:auto;background:#0a1424;color:#cfe6ff;padding:10px;border-radius:8px;font-size:12px;line-height:1.45;white-space:pre-wrap;word-break:break-all;margin-top:8px"></pre>
+    </div>
+  </div><!-- /pageStat -->
+</div>
+
+<script>
+(() => {
+  const SVC = '5f9b0001-7a2c-4d3e-9c1e-9b6f5c1a2d01';
+  const RX  = '5f9b0002-7a2c-4d3e-9c1e-9b6f5c1a2d01';
+  const TX  = '5f9b0003-7a2c-4d3e-9c1e-9b6f5c1a2d01';
+  const INFO = '5f9b0004-7a2c-4d3e-9c1e-9b6f5c1a2d01';   // 只读：http://<ip>:8080/ota
+  const HTTP_PORT = 8080;
+  const CHUNK = 240;
+  const NAME_PREFIX = 'ESP32-S3-AI';
+
+  const $ = id => document.getElementById(id);
+  const dot = $('dot'), devName = $('devName'), banner = $('banner');
+  const btnConnect = $('btnConnect'), btnDisconnect = $('btnDisconnect');
+  const btnStart = $('btnStart'), btnCancel = $('btnCancel');
+  const fileInput = $('file'), drop = $('drop'), fileInfo = $('fileInfo');
+  const bar = $('bar'), pct = $('pct'), speed = $('speed'), sizeEl = $('size'), stateEl = $('state');
+  const ipEl = $('ip'), btnWifi = $('btnWifi'), btnFind = $('btnFind'), findMsg = $('findMsg');
+  const wbar = $('wbar'), wpct = $('wpct'), wspeed = $('wspeed'), wstate = $('wstate');
+  const logBox = $('log');
+
+  let device = null, server = null, rxChar = null, txChar = null, infoChar = null;
+  let wfRunning = false;
+  let file = null, fileBuf = null;
+  let running = false, cancelled = false;
+  let waiters = {}; // event -> {resolve, reject, timer}
+  let t0 = 0, lastPctT = 0, lastBytes = 0;
+  let acked = 0;   // 设备回报的已落盘字节数（0x82 事件）
+
+  function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+  function log(msg, cls = '') {
+    const now = new Date();
+    const ts = now.toTimeString().slice(0, 8);
+    const line = document.createElement('div');
+    line.innerHTML = `<span class="ts">[${ts}]</span> <span class="${cls}">${escapeHtml(msg)}</span>`;
+    logBox.appendChild(line);
+    logBox.scrollTop = logBox.scrollHeight;
+  }
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  }
+  function showBanner(text, cls) {
+    banner.textContent = text;
+    banner.className = 'banner show ' + cls;
+  }
+  function hideBanner() { banner.className = 'banner'; }
+
+  if (!navigator.bluetooth) {
+    showBanner('当前浏览器不支持 Web Bluetooth。请使用电脑版 Chrome / Edge，或安卓 Chrome 打开本页。', 'err');
+    btnConnect.disabled = true;
+  }
+
+  function setConnected(on) {
+    btnConnect.disabled = on || !navigator.bluetooth;
+    btnDisconnect.disabled = !on;
+    dot.className = 'dot' + (on ? ' on' : '');
+    devName.textContent = on && device ? (device.name || 'ESP32-S3') : '未连接';
+    updateStart();
+  }
+
+  function updateStart() {
+    btnStart.disabled = running || wfRunning || !rxChar || !fileBuf;
+    btnWifi.disabled = wfRunning || running || !fileBuf;
+  }
+
+  function setState(s) { stateEl.textContent = s; }
+
+  // ---------- notifications ----------
+  function onNotify(e) {
+    const v = e.target.value;
+    if (!v || v.byteLength < 5) return;
+    const ev = v.getUint8(0);
+    const val = v.getUint32(1, true);
+    if (ev === 0x82) {
+      acked = val;   // 设备已落盘字节数，用作窗口流控
+      if (!running) speed.textContent = `${(val / 1024).toFixed(0)} KB 已写入`;
+      return;
+    }
+    const w = waiters[ev];
+    if (w) {
+      clearTimeout(w.timer);
+      delete waiters[ev];
+      if (ev === 0x84) w.reject(val); else w.resolve(val);
+    }
+  }
+
+  function waitEvent(ev, timeoutMs, label) {
+    return new Promise((resolve, reject) => {
+      if (waiters[ev]) {
+        clearTimeout(waiters[ev].timer);
+        waiters[ev].reject(new Error('重复等待'));
+      }
+      const timer = setTimeout(() => {
+        delete waiters[ev];
+        reject(new Error(`${label || '等待设备响应'}超时`));
+      }, timeoutMs);
+      waiters[ev] = { resolve, reject, timer };
+    });
+  }
+
+  function errText(code) {
+    return ({
+      1: '设备无法开始写入（空间不足）',
+      2: '固件写入失败',
+      3: '固件校验失败（文件不完整或损坏）',
+      4: '数据溢出，请重试',
+      5: '数据不完整或大小不正确',
+      6: '设备接收超时',
+      7: '升级已取消'
+    })[code] || `设备返回错误码 ${code}`;
+  }
+
+  // ---------- connect ----------
+  btnConnect.addEventListener('click', async () => {
+    hideBanner();
+    try {
+      setState('正在连接…');
+      device = await navigator.bluetooth.requestDevice({
+        filters: [{ namePrefix: NAME_PREFIX }, { services: [SVC] }],
+        optionalServices: [SVC]
+      });
+      device.addEventListener('gattserverdisconnected', onDisconnected);
+      log('发现设备：' + (device.name || device.id));
+      server = await device.gatt.connect();
+      const svc = await server.getPrimaryService(SVC);
+      rxChar = await svc.getCharacteristic(RX);
+      txChar = await svc.getCharacteristic(TX);
+      await txChar.startNotifications();
+      txChar.addEventListener('characteristicvaluechanged', onNotify);
+      // 读"信息"特征，自动填好设备的 WiFi 升级地址（免去在设备上输 IP）
+      try {
+        infoChar = await svc.getCharacteristic(INFO);
+        await readDeviceIp(true);
+      } catch (e) {
+        log('未读到设备 IP（可手动填写）：' + e.message, 'warn');
+      }
+      setConnected(true);
+      setState('已连接，可以升级');
+      log('已连接，OTA 服务就绪', 'ok');
+    } catch (e) {
+      log('连接失败：' + e.message, 'err');
+      showBanner('连接失败：' + e.message, 'err');
+      setState('连接失败');
+      cleanup(false);
+    }
+  });
+
+  btnDisconnect.addEventListener('click', () => {
+    if (running) { log('升级中请不要断开', 'warn'); return; }
+    cleanup(true);
+  });
+
+  function onDisconnected() {
+    log('设备已断开', 'warn');
+    if (running) {
+      showBanner('升级过程中连接断开。请重新连接后重试。', 'err');
+      cancelled = true;
+    }
+    cleanup(false);
+  }
+
+  function cleanup(disconnect) {
+    running = false;
+    for (const k in waiters) { clearTimeout(waiters[k].timer); waiters[k].reject(new Error('连接已断开')); }
+    waiters = {};
+    try { if (txChar) txChar.removeEventListener('characteristicvaluechanged', onNotify); } catch (_) {}
+    try { if (txChar) txChar.stopNotifications(); } catch (_) {}
+    if (disconnect && device && device.gatt.connected) device.gatt.disconnect();
+    rxChar = txChar = infoChar = null; server = null;
+    setConnected(false);
+    btnCancel.disabled = true;
+    updateStart();
+  }
+
+  // ---------- 自动查找设备（mDNS → 蓝牙读到的 IP → 网段扫描） ----------
+  const MDNS_HOSTS = ['esp32-ai-s3.local', 'esp32-ai.local'];
+  const GUESS_NETS = ['192.168.1', '192.168.0', '192.168.31', '192.168.2', '10.0.0'];
+
+  async function probeInfo(host, timeoutMs) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
+    try {
+      const r = await fetch(`http://${host}:${HTTP_PORT}/info`, { signal: ac.signal, cache: 'no-store' });
+      if (!r.ok) return null;
+      const j = await r.json();
+      return (j && j.ok) ? j : null;
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  async function scanSubnet(prefix) {
+    const CONC = 48, TIMEOUT = 350;
+    let next = 1, found = null;
+    const worker = async () => {
+      while (next <= 254 && !found) {
+        const host = `${prefix}.${next++}`;
+        const j = await probeInfo(host, TIMEOUT);
+        if (j && !found) { found = host; log('扫描命中：' + host + '（固件 ' + j.ver + '）', 'ok'); }
+      }
+    };
+    await Promise.all(Array.from({ length: CONC }, worker));
+    return found;
+  }
+
+  async function discover() {
+    if (running || wfRunning) return '';
+    btnFind.disabled = true;
+    try {
+      // 1) mDNS（ArduinoOTA 已经注册了 ESP32-AI-S3.local）
+      for (const h of MDNS_HOSTS) {
+        findMsg.textContent = '尝试 ' + h + ' …';
+        const j = await probeInfo(h, 1500);
+        if (j) {
+          ipEl.value = h;
+          findMsg.textContent = '已找到：' + h + '（固件 ' + j.ver + '）';
+          log('mDNS 命中 ' + h, 'ok');
+          return h;
+        }
+      }
+      // 2) 蓝牙特征里读到的 IP
+      if (infoChar) {
+        findMsg.textContent = '从蓝牙读取设备 IP …';
+        const ip = await readDeviceIp(false);
+        if (ip) {
+          const j = await probeInfo(ip, 1000);
+          if (j) {
+            ipEl.value = ip;
+            findMsg.textContent = '已找到：' + ip + '（固件 ' + j.ver + '）';
+            return ip;
+          }
+        }
+      }
+      // 3) 网段扫描
+      for (const pre of GUESS_NETS) {
+        findMsg.textContent = '扫描 ' + pre + '.1–254 …';
+        const hit = await scanSubnet(pre);
+        if (hit) {
+          ipEl.value = hit;
+          findMsg.textContent = '已找到：' + hit;
+          return hit;
+        }
+      }
+      findMsg.textContent = '没找到：确认电脑和 ESP32 在同一个 WiFi，或手动填 IP（设备上：设置 → 设备状态）';
+      return '';
+    } finally {
+      btnFind.disabled = false;
+    }
+  }
+
+  // ---------- WiFi 推送（设备 8080 端口，比蓝牙快很多） ----------
+  async function readDeviceIp(verbose) {
+    if (!infoChar) return '';
+    try {
+      const v = await infoChar.readValue();
+      const txt = new TextDecoder().decode(v);
+      const m = txt.match(/\/\/([\d.]+)/);
+      if (m && m[1] && m[1] !== '0.0.0.0') {
+        if (!ipEl.value) ipEl.value = m[1];
+        syncIpFields();
+        if (verbose) log('设备 WiFi 升级地址：' + txt, 'ok');
+        return m[1];
+      }
+      if (verbose) log('设备还没连上 WiFi，读到的地址是「' + (txt || '空') + '」', 'warn');
+    } catch (e) {
+      if (verbose) log('读取设备 IP 失败：' + e.message, 'warn');
+    }
+    return '';
+  }
+
+  async function wifiPush() {
+    if (!fileBuf) { showBanner('请先选择固件文件', 'err'); return; }
+    let ip = ipEl.value.trim();
+    if (!ip) {
+      ip = await readDeviceIp(false);
+      if (ip) ipEl.value = ip;
+    }
+    if (!ip) {
+      showBanner('请先填设备 IP（设备上：设置 → 设备状态 → 本机 IP），或先连蓝牙自动读取', 'err');
+      return;
+    }
+    const url = `http://${ip}:${HTTP_PORT}/ota`;
+    wfRunning = true;
+    updateStart();
+    wbar.style.width = '0%';
+    wpct.textContent = '0%';
+    wspeed.textContent = '—';
+    wstate.textContent = '连接设备…';
+    log('WiFi 推送开始：' + url);
+
+    let lastT = performance.now(), lastB = 0;
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url, true);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.upload.onprogress = e => {
+      if (!e.lengthComputable) return;
+      const p = e.loaded * 100 / e.total;
+      wbar.style.width = p.toFixed(1) + '%';
+      wpct.textContent = p.toFixed(1) + '%';
+      const now = performance.now();
+      if (now - lastT > 300) {
+        const bps = (e.loaded - lastB) / ((now - lastT) / 1000);
+        if (bps > 0) wspeed.textContent = fmtBps(bps) + ' · 剩余 ' + fmtTime((e.total - e.loaded) / bps);
+        lastT = now; lastB = e.loaded;
+      }
+      wstate.textContent = `已发送 ${(e.loaded / 1024).toFixed(0)} / ${(e.total / 1024).toFixed(0)} KB`;
+    };
+    xhr.onload = () => {
+      wfRunning = false;
+      if (xhr.status === 200) {
+        wbar.style.width = '100%';
+        wpct.textContent = '100%';
+        wstate.textContent = '升级成功，设备重启中';
+        showBanner('WiFi 升级成功！设备正在重启，等 5 秒左右。', 'ok');
+        log('WiFi 升级成功', 'ok');
+      } else {
+        wstate.textContent = '失败：HTTP ' + xhr.status;
+        showBanner('WiFi 升级失败：' + (xhr.responseText || ('HTTP ' + xhr.status)), 'err');
+        log('WiFi 升级失败：' + xhr.status + ' ' + (xhr.responseText || ''), 'err');
+      }
+      updateStart();
+    };
+    xhr.onerror = () => {
+      wfRunning = false;
+      wstate.textContent = '连不上设备';
+      showBanner('连不上 ' + url + '：确认电脑和 ESP32 在同一个 WiFi、IP 没填错、设备屏幕显示「端口 8080 已就绪」', 'err');
+      log('WiFi 网络错误（IP 不对 / 不同网段 / 设备未联网）', 'err');
+      updateStart();
+    };
+    xhr.send(fileBuf);
+  }
+
+  // ---------- file ----------  drop.addEventListener('click', () => fileInput.click());
+  drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+  drop.addEventListener('drop', e => {
+    e.preventDefault(); drop.classList.remove('over');
+    if (e.dataTransfer.files.length) handleFile(e.dataTransfer.files[0]);
+  });
+  fileInput.addEventListener('change', () => { if (fileInput.files.length) handleFile(fileInput.files[0]); });
+
+  async function handleFile(f) {
+    hideBanner();
+    file = f;
+    fileBuf = null;
+    fileInfo.textContent = '读取中…';
+    try {
+      const buf = new Uint8Array(await f.arrayBuffer());
+      if (buf.length < 65536) throw new Error('文件太小，不像是固件');
+      if (buf.length > 3145728) throw new Error('文件超过 3 MB，超出 OTA 分区');
+      if (buf[0] !== 0xE9) throw new Error('不是 ESP32 固件（magic 0xE9）');
+      const chip = buf[12] | (buf[13] << 8);
+      if (chip !== 0x0009) throw new Error('不是 ESP32-S3 固件（chip id ' + chip + '）');
+      fileBuf = buf;
+      fileInfo.innerHTML = `<b style="color:var(--text)">${escapeHtml(f.name)}</b> · ${(buf.length/1048576).toFixed(2)} MB · ESP32-S3`;
+      sizeEl.textContent = `${(buf.length/1048576).toFixed(2)} MB`;
+      log(`已选择 ${f.name}（${buf.length} 字节）`, 'ok');
+      updateStart();
+    } catch (e) {
+      fileBuf = null;
+      fileInfo.textContent = '文件无效：' + e.message;
+      log('文件无效：' + e.message, 'err');
+      showBanner('文件无效：' + e.message, 'err');
+      updateStart();
+    }
+  }
+
+  // ---------- upgrade ----------
+  btnWifi.addEventListener('click', () => { wifiPush().catch(e => log(String(e), 'err')); });
+  btnFind.addEventListener('click', () => { discover().catch(e => { findMsg.textContent = '查找失败：' + e.message; }); });
+
+  btnStart.addEventListener('click', async () => {
+    if (!rxChar || !fileBuf || running) return;
+    hideBanner();
+    running = true; cancelled = false;
+    btnStart.disabled = true;
+    btnCancel.disabled = false;
+    btnConnect.disabled = true;
+    btnDisconnect.disabled = true;
+    bar.style.width = '0%';
+    pct.textContent = '0%';
+    speed.textContent = '—';
+    const total = fileBuf.length;
+
+    try {
+      setState('请求开始…');
+      log('发送开始请求，设备正在擦除 OTA 分区…');
+      const begin = new Uint8Array(5);
+      begin[0] = 0x01;
+      new DataView(begin.buffer).setUint32(1, total, true);
+      await rxChar.writeValue(begin);
+
+      await waitEvent(0x81, 60000, '设备准备');
+      log('设备已准备，开始传输', 'ok');
+
+      t0 = performance.now(); lastPctT = t0; lastBytes = 0;
+      let off = 0;
+      let chunkSize = CHUNK;
+      acked = 0;
+
+      // 无响应写入 + 窗口流控：比"每个包等一次响应"快 4~5 倍
+      const noRsp = !!(rxChar.properties && rxChar.properties.writeWithoutResponse);
+      const WIN = 12000;   // 设备端流式缓冲 16 KB，留 4 KB 余量
+      log(noRsp ? '使用无响应写入（高速模式）' : '该特征不支持无响应写入，回退为带响应写入（较慢）',
+          noRsp ? 'ok' : 'warn');
+
+      while (off < total) {
+        if (cancelled) throw new Error('已取消');
+
+        if (noRsp) {
+          const tWait = performance.now();
+          while (off - acked > WIN) {
+            if (cancelled) throw new Error('已取消');
+            if (performance.now() - tWait > 20000) {
+              throw new Error('设备长时间没有回报进度，请把分片调小后重试');
+            }
+            await sleep(10);
+          }
+        }
+
+        const n = Math.min(chunkSize, total - off);
+        const pkt = new Uint8Array(n + 1);
+        pkt[0] = 0x02;
+        pkt.set(fileBuf.subarray(off, off + n), 1);
+
+        try {
+          if (noRsp) await rxChar.writeValueWithoutResponse(pkt);
+          else await rxChar.writeValue(pkt);
+        } catch (err) {
+          if (chunkSize > 60) {
+            chunkSize = Math.floor(chunkSize / 2);
+            log(`写入失败，分片降到 ${chunkSize} 字节后重试`, 'warn');
+            await sleep(60);
+            continue;
+          }
+          throw err;
+        }
+        off += n;
+
+        const p = off * 100 / total;
+        bar.style.width = p.toFixed(2) + '%';
+        pct.textContent = p.toFixed(1) + '%';
+
+        const now = performance.now();
+        if (now - lastPctT > 400 || off === total) {
+          const bps = (off - lastBytes) / ((now - lastPctT) / 1000);
+          if (bps > 0) {
+            const eta = Math.max(0, (total - off) / bps);
+            speed.textContent = `${fmtBps(bps)} · 剩余 ${fmtTime(eta)}`;
+          }
+          lastPctT = now; lastBytes = off;
+          setState(`已发送 ${(off/1024).toFixed(0)} / ${(total/1024).toFixed(0)} KB`);
+        }
+      }
+
+      // 收尾：等设备把缓冲里的尾巴落盘，再发结束指令
+      const tEnd = performance.now();
+      while (noRsp && off - acked > 8192) {
+        if (performance.now() - tEnd > 20000) break;
+        await sleep(20);
+      }
+
+      setState('等待设备校验…');
+      log('传输完成，等待设备校验固件…');
+      await rxChar.writeValue(new Uint8Array([0x03]));
+      await waitEvent(0x83, 90000, '固件校验');
+      bar.style.width = '100%';
+      pct.textContent = '100%';
+      setState('升级成功，设备重启中');
+      showBanner('升级成功！设备正在重启，约 5 秒后重新广播。', 'ok');
+      log('升级成功，设备即将重启', 'ok');
+    } catch (e) {
+      if (e && typeof e === 'number') {
+        const t = errText(e);
+        log(t, 'err');
+        showBanner(t, 'err');
+        setState('升级失败');
+      } else {
+        log('升级失败：' + (e.message || e), 'err');
+        showBanner('升级失败：' + (e.message || e), 'err');
+        setState('升级失败');
+      }
+      try { if (rxChar) await rxChar.writeValue(new Uint8Array([0x04])); } catch (_) {}
+    } finally {
+      running = false;
+      btnCancel.disabled = true;
+      btnConnect.disabled = false;
+      btnDisconnect.disabled = !device;
+      updateStart();
+    }
+  });
+
+  btnCancel.addEventListener('click', async () => {
+    if (!running) return;
+    cancelled = true;
+    btnCancel.disabled = true;
+    try { if (rxChar) await rxChar.writeValue(new Uint8Array([0x04])); } catch (_) {}
+    log('已发送取消指令', 'warn');
+  });
+
+  function fmtBps(bps) {
+    if (!isFinite(bps) || bps <= 0) return '—';
+    if (bps > 1024 * 1024) return (bps / 1048576).toFixed(2) + ' MB/s';
+    return (bps / 1024).toFixed(1) + ' KB/s';
+  }
+  function fmtTime(s) {
+    if (!isFinite(s) || s <= 0) return '0s';
+    if (s < 60) return s.toFixed(0) + 's';
+    return Math.floor(s / 60) + 'm' + Math.round(s % 60) + 's';
+  }
+
+  // ================= 网页控制台（P1：设备设置 + 设备状态） =================
+  const cipEl = $('cip'), sipEl = $('sip'), pinEl = $('pinIn'), pinRow = $('pinRow');
+  const confMsg = $('confMsg'), confList = $('confList');
+  const statMsg = $('statMsg'), statGrid = $('statGrid');
+
+  // ---- tab 切换 ----
+  const pages = { tabPush: 'pagePush', tabConf: 'pageConf', tabStat: 'pageStat' };
+  Object.keys(pages).forEach(id => {
+    $(id).addEventListener('click', () => {
+      Object.keys(pages).forEach(k => {
+        $(k).classList.toggle('on', k === id);
+        $(pages[k]).hidden = (k !== id);
+      });
+      if (id === 'tabStat' && !statTimer) startStat();
+      if (id !== 'tabStat' && statTimer) stopStat();
+    });
+  });
+
+  // ---- 三个 IP 输入框双向同步 ----
+  function syncIpFields() {
+    const v = ipEl.value.trim();
+    [cipEl, sipEl].forEach(el => { if (el.value.trim() !== v) el.value = v; });
+  }
+  [ipEl, cipEl, sipEl].forEach(el =>
+    el.addEventListener('input', () => {
+      const v = el.value.trim();
+      [ipEl, cipEl, sipEl].forEach(o => { if (o !== el && o.value.trim() !== v) o.value = v; });
+    }));
+
+  // ---- 统一 API 封装：自动带 X-Pin；401 时提示 ----
+  function pinReady() { return pinEl.value.trim().length === 4; }
+  async function api(ip, path, opts = {}) {
+    opts.cache = 'no-store';
+    opts.headers = Object.assign({}, opts.headers);
+    if (pinReady()) opts.headers['X-Pin'] = pinEl.value.trim();
+    let r;
+    try { r = await fetch(`http://${ip}:${HTTP_PORT}${path}`, opts); }
+    catch (e) { throw new Error('连不上设备（检查 IP / 同一 WiFi）'); }
+    if (r.status === 401) throw new Error('需要 PIN：设备上 设置 → 配置项 → 「网页需要 PIN」开启后，PIN 显示在设备状态页');
+    if (r.status === 400) { const j = await r.json().catch(() => ({})); throw new Error(j.err || '参数错误'); }
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.json();
+  }
+  async function apiText(ip, path) {
+    const opts = { cache: 'no-store' };
+    if (pinReady()) opts.headers = { 'X-Pin': pinEl.value.trim() };
+    let r;
+    try { r = await fetch(`http://${ip}:${HTTP_PORT}${path}`, opts); }
+    catch (e) { throw new Error('连不上设备（检查 IP / 同一 WiFi）'); }
+    if (r.status === 401) throw new Error('需要 PIN：先在上方 PIN 框输入 4 位 PIN');
+    if (r.status === 404) throw new Error('网页日志已关闭（设备上：设置 → 配置项 → 调试 →「网页日志」）');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return r.text();
+  }
+
+  // ---- 网页日志 ----
+  $('logBtn').addEventListener('click', async () => {
+    const ip = sipEl.value.trim();
+    if (!ip) { $('logMsg').textContent = '请先填设备 IP'; return; }
+    $('logMsg').textContent = '拉取中...';
+    try {
+      const t = await apiText(ip, '/api/logs');
+      const box = $('logBox');
+      box.hidden = false;
+      box.textContent = t;
+      box.scrollTop = box.scrollHeight;
+      $('logMsg').textContent = `已加载 ${t.length} 字节 · ${new Date().toTimeString().slice(0, 8)}`;
+    } catch (e) { $('logMsg').textContent = '失败：' + e.message; }
+  });
+  $('logClear').addEventListener('click', async () => {
+    const ip = sipEl.value.trim();
+    if (!ip) { $('logMsg').textContent = '请先填设备 IP'; return; }
+    try {
+      await apiText(ip, '/api/logs?clear=1');
+      $('logBox').hidden = false;
+      $('logBox').textContent = '(已清空)';
+      $('logMsg').textContent = '设备日志已清空';
+    } catch (e) { $('logMsg').textContent = '失败：' + e.message; }
+  });
+
+  // ---- 设备设置：按 schema 渲染表单 ----
+  function itemControl(it) {
+    if (it.t === 'bool') {
+      const on = it.v === '1';
+      return `<button data-act="toggle" data-k="${it.k}" class="${on ? '' : 'ghost'}">${on ? '开（点击关闭）' : '关（点击开启）'}</button>`;
+    }
+    if (it.t === 'enum') {
+      const opts = (it.o || '').split('|').map(o =>
+        `<option value="${escapeHtml(o)}" ${o === it.v ? 'selected' : ''}>${escapeHtml(o)}</option>`).join('');
+      return `<div class="cfgRow"><div class="grow"><select data-k="${it.k}">${opts}</select></div>
+              <button data-act="save" data-k="${it.k}" class="ghost">保存</button></div>`;
+    }
+    const type = it.t === 'int' ? 'number' : (it.secret ? 'password' : 'text');
+    const extra = it.t === 'int' && it.min != null ? ` min="${it.min}" max="${it.max}"` : '';
+    const ph = it.secret ? '已设置（输入新值覆盖，留空不变）' : '';
+    return `<div class="cfgRow"><div class="grow"><input data-k="${it.k}" type="${type}"${extra} placeholder="${ph}" value="${it.secret ? '' : escapeHtml(it.v)}"></div>
+            <button data-act="save" data-k="${it.k}" class="ghost">保存</button></div>`;
+  }
+
+  function renderConf(json) {
+    confList.innerHTML = '';
+    (json.groups || []).forEach(g => {
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.innerHTML = `<b class="cfgGroup">${escapeHtml(g.g)}</b>` + g.items.map(it => `
+        <div class="cfgItem" data-item="${it.k}">
+          <div class="lbl"><b>${escapeHtml(it.l)}</b><code>${it.k} · ${it.t}${it.secret ? ' · 打码' : ''}</code></div>
+          ${itemControl(it)}
+          <div class="msg"></div>
+        </div>`).join('');
+      confList.appendChild(card);
+    });
+  }
+
+  async function saveItem(k, v, msgEl, btn) {
+    const ip = cipEl.value.trim();
+    if (!ip) { confMsg.textContent = '请先填设备 IP'; return; }
+    if (btn) btn.disabled = true;
+    try {
+      const j = await api(ip, '/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: `k=${encodeURIComponent(k)}&v=${encodeURIComponent(v)}`
+      });
+      if (msgEl) { msgEl.textContent = '已保存' + (j.v != null ? `：${j.v}` : ''); msgEl.className = 'msg ok'; }
+      // secret 项保存后刷新真实打码值
+      const item = confList.querySelector(`[data-item="${k}"]`);
+      if (item && item.querySelector('input[type=password]')) item.querySelector('input').value = '';
+      confMsg.textContent = `${k} 已保存`;
+    } catch (e) {
+      if (msgEl) { msgEl.textContent = '失败：' + e.message; msgEl.className = 'msg err'; }
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  confList.addEventListener('click', e => {
+    const btn = e.target.closest('button'); if (!btn) return;
+    const itemEl = btn.closest('.cfgItem'); if (!itemEl) return;
+    const msgEl = itemEl.querySelector('.msg');
+    const k = btn.dataset.k || itemEl.dataset.item;
+    if (btn.dataset.act === 'toggle') {
+      const on = btn.classList.contains('ghost');
+      saveItem(k, on ? '1' : '0', msgEl, btn).then(() => {
+        btn.className = on ? '' : 'ghost';
+        btn.textContent = on ? '开（点击关闭）' : '关（点击开启）';
+      });
+    } else if (btn.dataset.act === 'save') {
+      const sel = itemEl.querySelector('select');
+      const inp = itemEl.querySelector('input');
+      const v = sel ? sel.value : (inp ? inp.value : '');
+      if (inp && inp.type === 'password' && !v) { msgEl.textContent = '留空表示不修改'; msgEl.className = 'msg'; return; }
+      saveItem(k, v, msgEl, btn);
+    }
+  });
+
+  async function loadConf() {
+    const ip = cipEl.value.trim();
+    if (!ip) { confMsg.textContent = '请先填设备 IP（可在推送升级页连蓝牙自动获取，或手动填写）'; return; }
+    confMsg.textContent = '加载中…';
+    confList.innerHTML = '';
+    try {
+      const caps = await api(ip, '/api/caps');
+      pinRow.style.display = caps.pinreq ? 'flex' : 'none';
+      if (caps.pinreq && !pinReady()) {
+        confMsg.textContent = '设备已开启 PIN 保护，先输入 4 位 PIN（显示在设备屏幕：设置 → 设备状态），再点「加载设置」';
+        return;
+      }
+      const j = await api(ip, '/api/settings');
+      renderConf(j);
+      confMsg.textContent = `固件 ${caps.fw} · 已加载 ${j.groups.reduce((n, g) => n + g.items.length, 0)} 个设置项`;
+    } catch (e) {
+      confMsg.textContent = '加载失败：' + e.message;
+      if (/PIN/.test(e.message)) pinRow.style.display = 'flex';
+    }
+  }
+  pinEl.addEventListener('input', () => { if (pinReady() && !confList.children.length) loadConf(); });
+  $('cLoad').addEventListener('click', loadConf);
+
+  // ---- 设备状态：1 秒轮询 ----
+  let statTimer = null;
+  function statCell(k, v, cls = '') {
+    return `<div class="statCell"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
+  }
+  function renderStat(j) {
+    let h = '';
+    h += statCell('固件版本', escapeHtml(j.fw || ''));
+    h += statCell('运行槽位', escapeHtml(j.slot || '-'));
+    h += statCell('本机 IP', j.ip ? escapeHtml(j.ip) : '<span class="err">未联网</span>', j.ip ? '' : 'err');
+    h += statCell('WiFi', j.ssid ? `${escapeHtml(j.ssid)}（${j.rssi} dBm）` : '未连接', j.ssid ? 'ok' : 'warn');
+    h += statCell('空闲内存', `${(j.heap / 1024).toFixed(0)} KB · 最大块 ${(j.maxblk / 1024).toFixed(0)} KB`);
+    h += statCell('蓝牙', `${escapeHtml((j.ble && j.ble.name) || '-')} · ${j.ble && j.ble.conn ? '已连接' : '未连接'}${j.ble && j.ble.adv ? ' · 广播中' : ''}`,
+                  j.ble && j.ble.conn ? 'ok' : '');
+    if (j.bms && j.bms.ok)
+      h += statCell('电池 BMS', `SOC ${j.bms.soc}% · ${j.bms.v} V · ${j.bms.a} A`, 'ok');
+    else
+      h += statCell('电池 BMS', '无数据', 'warn');
+    if (j.pinreq) h += statCell('网页 PIN', `已开启 · 当前 PIN <b>${escapeHtml(j.pin || '')}</b>（重启后变化）`, 'warn');
+    statGrid.innerHTML = h;
+  }
+  async function statTick() {
+    const ip = sipEl.value.trim();
+    if (!ip) { statMsg.textContent = '请先填设备 IP'; stopStat(); return; }
+    try {
+      const caps = await api(ip, '/api/caps');
+      pinRow.style.display = caps.pinreq ? 'flex' : 'none';
+      const j = await api(ip, '/api/status');
+      renderStat(j);
+      statMsg.textContent = `固件 ${j.fw} · 上次刷新 ${new Date().toTimeString().slice(0, 8)}`;
+    } catch (e) {
+      statMsg.textContent = '刷新失败：' + e.message;
+      if (/PIN/.test(e.message)) stopStat();
+    }
+  }
+  function startStat() {
+    if (statTimer) return;
+    if (!sipEl.value.trim()) { statMsg.textContent = '请先填设备 IP（可在推送升级页连蓝牙自动获取）'; return; }
+    statTick();
+    statTimer = setInterval(statTick, 1000);
+    $('sStart').disabled = true; $('sStop').disabled = false;
+  }
+  function stopStat() {
+    if (statTimer) { clearInterval(statTimer); statTimer = null; }
+    $('sStart').disabled = false; $('sStop').disabled = true;
+  }
+  $('sStart').addEventListener('click', startStat);
+  $('sStop').addEventListener('click', stopStat);
+
+  updateStart();
+  log('页面就绪，等待连接设备');
+})();
+</script>
+</body>
+</html>

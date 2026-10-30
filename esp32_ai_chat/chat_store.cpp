@@ -81,6 +81,13 @@ static void wrapMsg(ChatMsg &m)
   m.bh = (int)m.lines.size() * LINE_H + 2 * BUB_VPAD;
 }
 
+int chatTotalChars()
+{
+  int n = 0;
+  for (auto &m : msgs) n += (int)m.text.length();
+  return n;
+}
+
 void chatAdd(bool user, const String &text, bool err)
 {
   ChatMsg m;
@@ -88,9 +95,17 @@ void chatAdd(bool user, const String &text, bool err)
   m.err = err;
   m.text = text;
   sanitizeText(m.text);
-  if (m.text.length() > 8000) m.text = m.text.substring(0, 8000);
+  if (m.text.length() > CHAT_MSG_MAX) m.text = m.text.substring(0, CHAT_MSG_MAX);
   wrapMsg(m);
   msgs.push_back(m);
+
+  // 内存上限：条数或总字符数超限时丢弃最早的消息，避免长时间聊天把堆吃光
+  int total = chatTotalChars();
+  while (msgs.size() > 1 && ((int)msgs.size() > CHAT_MAX_MSGS || total > CHAT_MAX_CHARS))
+  {
+    total -= (int)msgs.front().text.length();
+    msgs.erase(msgs.begin());
+  }
 }
 
 void chatClear()

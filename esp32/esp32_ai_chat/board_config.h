@@ -11,6 +11,11 @@
 #define PIN_I2C_SDA  8
 #define PIN_I2C_SCL  7
 
+// TF / SD card (1-bit SDMMC, from Waveshare 07_sd_test demo)
+#define PIN_SD_CLK   11
+#define PIN_SD_CMD   10
+#define PIN_SD_D0    9
+
 #define TCA_ADDR     0x20
 #define TCA_REG_OUT  0x02
 #define TCA_REG_CFG  0x06

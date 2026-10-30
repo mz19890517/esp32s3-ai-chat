@@ -152,6 +152,11 @@ bool aiPoll(String &reply, String &err)
 {
   if (!done) return false;
   xSemaphoreTake(mtx, portMAX_DELAY);
+  if (!done)
+  {
+    xSemaphoreGive(mtx);
+    return false;
+  }
   reply = resultReply;
   err = resultErr;
   done = false;

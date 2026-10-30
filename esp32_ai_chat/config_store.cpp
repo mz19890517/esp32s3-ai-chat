@@ -13,6 +13,7 @@ void cfgLoad()
   cfg.url = prefs.getString("url", "");
   cfg.key = prefs.getString("key", "");
   cfg.model = prefs.getString("model", "");
+  cfg.otaUrl = prefs.getString("otaurl", "");
   prefs.end();
   if (!cfg.ssid.length()) cfg.ssid = DEFAULT_SSID;
   if (!cfg.wpass.length()) cfg.wpass = DEFAULT_WPASS;
@@ -35,6 +36,13 @@ void cfgSaveApi()
   prefs.putString("url", cfg.url);
   prefs.putString("key", cfg.key);
   prefs.putString("model", cfg.model);
+  prefs.end();
+}
+
+void cfgSaveOtaUrl()
+{
+  prefs.begin("aichat", false);
+  prefs.putString("otaurl", cfg.otaUrl);
   prefs.end();
 }
 

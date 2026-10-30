@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>已废弃 —— 请用 ble_ota/index.html</title>
+<style>body{font:16px/1.7 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif;
+padding:40px;max-width:680px;margin:auto;background:#0d1117;color:#e6edf3}
+code{background:#161b22;padding:2px 6px;border-radius:4px;color:#79c0ff}
+a{color:#2f81f7}</style>
+</head>
+<body>
+<h2>这个页面已废弃</h2>
+<p>设备固件（<code>esp32/esp32_ai_chat</code>）里的蓝牙 OTA 用的是另一套协议，
+本页（6e400004 服务 / 0x01+size+crc）连不上，推上去必然失败。请改用工程里已有的那一份：</p>
+<p><a href="../../ble_ota/index.html">../../ble_ota/index.html</a></p>
+<p>设备端服务 UUID 为 <code>5f9b0002-…</code>，指令为 <code>0x01+size</code> 开始、
+<code>0x02+data</code> 传输、<code>0x03</code> 结束、<code>0x04</code> 中止——以那份网页为准。</p>
+<p>（这个 <code>tools/ota_web</code> 目录可以整个删掉。）</p>
+</body>
+</html>

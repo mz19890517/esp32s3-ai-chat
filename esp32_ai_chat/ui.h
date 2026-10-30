@@ -56,3 +56,5 @@ int centerBaseY(int y, int h);
 void drawBtn(int x, int y, int w, int h, const char *label, uint16_t bg, uint16_t fg, uint16_t border = 0);
 void drawTextAt(int x, int baseY, const char *s, uint16_t fg, uint16_t bg);
 void drawTextAt(int x, int baseY, const String &s, uint16_t fg, uint16_t bg);
+void drawScrollbar(int x, int top, int viewH, int contentH, int scroll);
+void drawProgressBar(int x, int y, int w, int h, int pct);

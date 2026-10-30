@@ -3,3 +3,19 @@
 *.bin
 *.elf
 merged_flash.bin
+
+# 构建/烧录日志与调试脚本输出（历史遗留，不要进仓库）
+*.log
+*.err
+build*
+upload*
+rebuild*
+pio_out.*
+pio_err.*
+
+# PlatformIO 会把 .ino 预处理成同名 .ino.cpp 放在源码目录，属于生成物
+*.ino.cpp
+
+# 本地抓包/调试脚本
+capture_log.txt
+boot_log*.txt

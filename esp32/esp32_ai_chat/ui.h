@@ -7,6 +7,7 @@
 #endif
 #include <U8g2lib.h>
 #include <Arduino_GFX_Library.h>
+#include "log_tee.h"
 
 #define TITLE_H  36
 #define CHAT_TOP TITLE_H
@@ -36,11 +37,12 @@ extern const uint16_t COL_OK;
 extern Arduino_Canvas *gfx;
 
 void ui_init();
+void bootSplash(const String &msg);
 
 #define BOOTLOG(fmt, ...)                \
   do                                     \
   {                                      \
-    Serial.printf(fmt, ##__VA_ARGS__);   \
+    logTeePrintf(fmt, ##__VA_ARGS__);   \
     Serial0.printf(fmt, ##__VA_ARGS__);  \
   } while (0)
 
@@ -56,3 +58,4 @@ int centerBaseY(int y, int h);
 void drawBtn(int x, int y, int w, int h, const char *label, uint16_t bg, uint16_t fg, uint16_t border = 0);
 void drawTextAt(int x, int baseY, const char *s, uint16_t fg, uint16_t bg);
 void drawTextAt(int x, int baseY, const String &s, uint16_t fg, uint16_t bg);
+void drawScrollbar(int x, int top, int viewH, int contentH, int scroll);

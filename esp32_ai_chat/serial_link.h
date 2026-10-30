@@ -1,7 +1,11 @@
 #pragma once
 #include <Arduino.h>
 
-enum LinkMode : uint8_t { LINK_BLE, LINK_TCP };
+enum LinkMode : uint8_t
+{
+  LINK_BLE,
+  LINK_TCP
+};
 
 #define SL_TCP_PORT 8888
 
@@ -16,3 +20,6 @@ bool slSend(const String &s);
 String slLocalIp();
 void slOtaSuspend();
 void slOtaResume();
+
+bool slBleConnected();
+const char *slDeviceName();
