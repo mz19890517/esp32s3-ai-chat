@@ -64,7 +64,7 @@ void cfgInit()
     AiRec r;
     if (aiRecGet(gAiVendor, r))
     {
-      if (r.url.length()) cfg.url = r.url;
+      if (r.url.length()) cfg.url = apiNormalizeBase(r.url);   // 历史坏记录（完整端点）也兜底
       if (r.key.length()) cfg.key = r.key;
       if (r.model.length()) cfg.model = r.model;
       gModels = r.models;
@@ -189,7 +189,7 @@ bool cfgSet(const CfgItem &it, const String &val, String &err)
 
   if (!strcmp(it.key, "net.ssid")) { cfg.ssid = v; cfgSaveWiFi(); }
   else if (!strcmp(it.key, "net.pass")) { cfg.wpass = v; cfgSaveWiFi(); }
-  else if (!strcmp(it.key, "ai.url")) { cfg.url = v; cfgSaveApi(); }
+  else if (!strcmp(it.key, "ai.url")) { cfg.url = apiNormalizeBase(v); cfgSaveApi(); }
   else if (!strcmp(it.key, "ai.key")) { cfg.key = v; cfgSaveApi(); }
   else if (!strcmp(it.key, "ai.model")) { cfg.model = v; cfgSaveApi(); }
   else if (!strcmp(it.key, "ota.url")) { cfg.otaUrl = v; cfgSaveOtaUrl(); }

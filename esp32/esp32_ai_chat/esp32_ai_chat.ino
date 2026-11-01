@@ -283,6 +283,7 @@ static void startWifiConnect(const String &ssid, const String &pw)
 {
   WiFi.disconnect(false, false);
   delay(50);
+  WiFi.setAutoReconnect(true);   // 扫描时被临时关掉，连网时恢复
   wcSsid = ssid;
   wcPw = pw;
   WiFi.begin(ssid.c_str(), pw.c_str());
@@ -321,6 +322,15 @@ static void scanStart()
 {
   apList.clear();
   scanRetry = 0;
+  // 家里连不上已保存的网络时，STA 一直处于连接/自动重连状态占住射频，
+  // 导致 esp_wifi_scan_start 返回 ESP_ERR_WIFI_STATE（WIFI_SCAN_FAILED，秒回“未发现网络”）。
+  // 扫描前先停掉自动重连并断开，让 STA 空闲下来（已保存的 cfg.ssid 不受影响）。
+  if (!wifiUp())
+  {
+    WiFi.setAutoReconnect(false);
+    WiFi.disconnect(false, false);
+    delay(150);
+  }
   WiFi.scanNetworks(true, true);
   scanPending = true;
   dirtyFull = true;
@@ -349,13 +359,18 @@ static void serviceScan()
   else if (n == WIFI_SCAN_FAILED)
   {
     WiFi.scanDelete();
-    if (scanRetry < 2)
+    if (scanRetry < 5)
     {
       scanRetry++;
-      delay(50);
+      delay(150);
       WiFi.scanNetworks(true, true);
     }
-    else scanPending = false;
+    else
+    {
+      scanPending = false;
+      showToast("扫描失败，请重试");
+      dirtyFull = true;
+    }
   }
 }
 
@@ -390,6 +405,7 @@ static void sendToAi()
     if ((int)hist.size() >= 20 || budget <= 0) break;
   }
   aiStart(hist, apiEndpoint(cfg.url), cfg.key, cfg.model);
+  logTeePrintf("[ui] send hist=%u url=%s\n", (unsigned)hist.size(), cfg.url.c_str());   // 崩溃锚点：发送动作已递交 AI 任务
 }
 
 static void serviceAi()
@@ -1272,10 +1288,11 @@ static void exitEdit(bool save)
   if (save)
   {
     editDraft.trim();
-    if (editField == 0) cfg.url = editDraft;
+    if (editField == 0) cfg.url = apiNormalizeBase(editDraft);   // 误填完整端点也存成基础地址
     else if (editField == 1) cfg.model = editDraft;
     else cfg.key = editDraft;
     cfgSaveApi();
+    if (editField == 0) logTeePrintf("[cfg] url saved=%s\n", cfg.url.c_str());
     showToast("已保存");
   }
   editField = -1;
@@ -1309,6 +1326,7 @@ static void handleChatTouch(bool press, bool release, bool down, int x, int y)
     {
       int contentH = chatContentHeight(aiBusy());
       int maxScroll = max(0, contentH - (cb - CHAT_TOP));
+      // 内容要跟手：手指下滑（dy>0）scroll 增大，渲染时内容下移露出更早消息（chatScroll=距底部距离，与列表页的距顶部语义相反）
       chatScroll = scrollAtDragStart + dy;
       if (chatScroll < 0) chatScroll = 0;
       if (chatScroll > maxScroll) chatScroll = maxScroll;
@@ -1629,7 +1647,8 @@ static void handleSerialTouch(bool press, bool release, bool down, int x, int y)
       buildTermLines();
       int viewH = cb - TERM_TOP - 6;
       int maxScroll = max(0, (int)termLines.size() * LINE_H - viewH);
-      serialScroll = scrollAtDragStart + dy;
+      // 串口屏与其他列表页同为"距顶部"语义：手指下滑（dy>0）scroll 减小，内容跟手下移
+      serialScroll = scrollAtDragStart - dy;
       if (serialScroll < 0) serialScroll = 0;
       if (serialScroll > maxScroll) serialScroll = maxScroll;
       dirtyFull = true;
@@ -1856,8 +1875,33 @@ void setup()
   Serial.begin(115200);
   delay(300);
   logTeeBegin();
-  BOOTLOG("\n[boot] setup enter rst=%d\n", (int)esp_reset_reason());
+  { // 复位原因人话：一眼分诊——3=PANIC(内存踩踏) 4/5=看门狗(任务) 6=硬件看门狗(系统挂死) 7=掉电
+    static const char *rstName[9] = {"未知", "上电", "软件重启", "PANIC崩溃", "中断看门狗",
+                                     "任务看门狗", "硬件看门狗(系统挂死)", "掉电", "SDIO"};
+    int r = (int)esp_reset_reason();
+    BOOTLOG("\n[boot] setup enter rst=%d (%s)\n", r, (r >= 0 && r < 9) ? rstName[r] : "未知");
+  }
   STK("enter");
+  { // 飞行记录仪：上次 AI 请求中途崩溃的话，NVS 里有崩溃前日志，开机读回打印
+    // 同时把上次崩溃挪到 crash2 槽位：连崩两次（中间那次开机会清 crash）也不丢第一次现场
+    bool v = false, v2 = false;
+    String prev2 = logTeePersistLoadKey("crash2", &v2);
+    String s = logTeePersistLoad(&v);
+    if (v && s.length())
+    {
+      logTeePrintf("[crash] 上次请求未正常结束（设备已重启），崩溃前日志：\n");
+      logTeePrint(s);
+      logTeePrintf("[crash] ——以上为崩溃前日志——\n");
+      logTeePersistSaveKey("crash2", s);
+    }
+    if (v2 && prev2.length())
+    {
+      logTeePrintf("[crash] ——再上一次崩溃的日志——\n");
+      logTeePrint(prev2);
+      logTeePrintf("[crash] ——以上为再上一次崩溃——\n");
+    }
+    logTeePersistClear();
+  }
   cfgLoad();
   cfgInit();    // 配置表：生成网页 PIN、载入新增设置项
   otaUrl = cfg.otaUrl;
@@ -1944,6 +1988,16 @@ void loop()
   lastX = x;
   lastY = y;
 
+  {   // 接口地址哨兵：任何代码改动 cfg.url 都在这里现形（曾复现运行期变成完整端点导致拉模型 404）
+    static String urlSentinel;
+    if (cfg.url != urlSentinel)
+    {
+      bool first = urlSentinel.length() == 0 && cfg.url.length() > 0;
+      urlSentinel = cfg.url;
+      if (!first) logTeePrintf("[cfg] URL CHANGED -> %s\n", cfg.url.c_str());
+    }
+  }
+
   serviceAi();
   serviceScan();
   serviceWifiConnect();
@@ -2005,7 +2059,9 @@ void loop()
   if (millis() - lastWatchdog > 15000)
   {
     lastWatchdog = millis();
-    if (cfg.ssid.length() && !wifiUp() && !wcConnecting && !scanPending)
+    // 在 WiFi 选择页时不自动 begin：否则重连会再次占住射频，导致“重新扫描”失败
+    if (cfg.ssid.length() && !wifiUp() && !wcConnecting && !scanPending
+        && scr != S_WIFI && scr != S_WIFIPASS)
       WiFi.begin(cfg.ssid.c_str(), cfg.wpass.c_str());
   }
 

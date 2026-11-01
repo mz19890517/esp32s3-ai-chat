@@ -152,7 +152,7 @@ void chatRender(int top, int h, int scroll, bool busy, int busyPhase)
   int maxScroll = max(0, contentH - h);
   if (scroll > maxScroll) scroll = maxScroll;
   if (scroll < 0) scroll = 0;
-  int y = top + h - scroll - contentH;
+  int y = top + h - contentH + scroll;  // scroll=距底部距离：0=最新消息贴底，增大时内容下移露出更早消息
   for (auto &m : msgs)
   {
     if (y + m.bh >= top && y <= top + h) drawBubble(m, y);

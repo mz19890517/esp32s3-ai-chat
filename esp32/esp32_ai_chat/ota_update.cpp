@@ -594,21 +594,28 @@ void otaBleBegin()
   if (!bleSb) bleSb = xStreamBufferCreate(16384, 1);
   if (!bleQ) bleQ = xQueueCreate(8, sizeof(BleCmd));
   if (!bleSb || !bleQ) return;
-  NimBLEService *svc = srv->createService(BLE_OTA_SVC);
-  if (!svc) return;
-  bleTx = svc->createCharacteristic(BLE_OTA_TX, NIMBLE_PROPERTY::NOTIFY);
-  NimBLECharacteristic *rx = svc->createCharacteristic(BLE_OTA_RX, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
-  if (!bleTx || !rx)
+  // suspend/resume 后 GATT 对象不删除（见 NimBLEDevice::deinit 的 FIX 注释），
+  // 这里复用幸存的旧服务重新 start 注册；只有首次才真正创建
+  NimBLEService *svc = srv->getServiceByUUID(BLE_OTA_SVC);
+  if (!svc)
   {
-    logTeePrintf("[ota] ble char create failed tx=%p rx=%p\n", (void *)bleTx, (void *)rx);
-    return;
+    svc = srv->createService(BLE_OTA_SVC);
+    if (!svc) return;
+    bleTx = svc->createCharacteristic(BLE_OTA_TX, NIMBLE_PROPERTY::NOTIFY);
+    NimBLECharacteristic *rx = svc->createCharacteristic(BLE_OTA_RX, NIMBLE_PROPERTY::WRITE | NIMBLE_PROPERTY::WRITE_NR);
+    if (!bleTx || !rx)
+    {
+      logTeePrintf("[ota] ble char create failed tx=%p rx=%p\n", (void *)bleTx, (void *)rx);
+      return;
+    }
+    rx->setCallbacks(new BleOtaCb());
+    bleInfo = svc->createCharacteristic(BLE_OTA_INFO, NIMBLE_PROPERTY::READ);
   }
-  rx->setCallbacks(new BleOtaCb());
-  bleInfo = svc->createCharacteristic(BLE_OTA_INFO, NIMBLE_PROPERTY::READ);
   if (bleInfo && otaLastInfo.length())
     bleInfo->setValue((const uint8_t *)otaLastInfo.c_str(), otaLastInfo.length());
   bleSvcOk = svc->start();
   logTeePrintf("[ota] ble ota svc start=%d info=%p\n", (int)bleSvcOk, (void *)bleInfo);
+  logTeePersistSave();   // resume 路径高危步骤，留现场
   static bool otaTaskMade = false;
   if (!otaTaskMade)
   {

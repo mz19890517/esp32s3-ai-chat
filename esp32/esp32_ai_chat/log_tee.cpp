@@ -83,3 +83,84 @@ String logTeeDump(size_t maxBytes)
   xSemaphoreGive(mtx);
   return out;
 }
+
+// —— 飞行记录仪（NVS 持久化）——
+// 存最近 ~1800 字节：NVS 单条 blob 上限内，足够覆盖一次请求的全部关键打点。
+#include <Preferences.h>
+static const char *PERSIST_NS = "logtee";
+static const char *PERSIST_KEY = "crash";
+static const size_t PERSIST_CAP = 1800;
+
+void logTeePersistSave()
+{
+  String s = logTeeDump(PERSIST_CAP);
+  if (!s.length()) return;
+  Preferences p;
+  if (!p.begin(PERSIST_NS, false)) return;
+  p.putBytes(PERSIST_KEY, s.c_str(), s.length() + 1); // 连结尾 0 一起存，读回即字符串
+  p.end();
+}
+
+String logTeePersistLoad(bool *valid)
+{
+  if (valid) *valid = false;
+  Preferences p;
+  if (!p.begin(PERSIST_NS, true)) return String();
+  size_t n = p.getBytesLength(PERSIST_KEY);
+  String out;
+  if (n)
+  {
+    char *buf = (char *)malloc(n);
+    if (buf)
+    {
+      p.getBytes(PERSIST_KEY, buf, n);
+      buf[n - 1] = 0; // 保险：确保可当 C 字符串
+      out = buf;
+      free(buf);
+      if (valid) *valid = true;
+    }
+  }
+  p.end();
+  return out;
+}
+
+void logTeePersistClear()
+{
+  Preferences p;
+  if (!p.begin(PERSIST_NS, false)) return;
+  if (p.isKey(PERSIST_KEY)) p.remove(PERSIST_KEY);
+  p.end();
+}
+
+// —— 按槽位读写（"crash"=上次崩溃，"crash2"=再上次崩溃）：连崩两次也不丢现场 ——
+String logTeePersistLoadKey(const char *key, bool *valid)
+{
+  if (valid) *valid = false;
+  Preferences p;
+  if (!p.begin(PERSIST_NS, true)) return String();
+  size_t n = p.getBytesLength(key);
+  String out;
+  if (n)
+  {
+    char *buf = (char *)malloc(n);
+    if (buf)
+    {
+      p.getBytes(key, buf, n);
+      buf[n - 1] = 0;
+      out = buf;
+      free(buf);
+      if (valid) *valid = true;
+    }
+  }
+  p.end();
+  return out;
+}
+
+void logTeePersistSaveKey(const char *key, const String &s)
+{
+  if (!s.length()) return;
+  Preferences p;
+  if (!p.begin(PERSIST_NS, false)) return;
+  p.putBytes(key, s.c_str(), s.length() + 1);
+  p.end();
+}

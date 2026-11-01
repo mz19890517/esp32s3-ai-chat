@@ -19,3 +19,4 @@ void cfgSaveApi();
 void cfgSaveOtaUrl();
 
 String apiEndpoint(const String &base);
+String apiNormalizeBase(const String &base);   // 剥掉误填的 /chat/completions 后缀（拉模型等基础地址用途）

@@ -21,6 +21,6 @@ bool slSend(const String &s);
 String slLocalIp();
 void slOtaSuspend();
 void slOtaResume();
-bool slBleSuspend();   // TLS 前临时释放 BLE 内存（网页蓝牙会断开）
-void slBleResume();    // 重建 BLE 栈；之后需再调 otaBleBegin() + slStartAdv()
+bool slBleSuspend();   // TLS 前临时释放 BLE 内存（网页蓝牙会断开）；实际 deinit 在 loop 任务执行
+void slBleResume();    // 完整重建 BLE 栈（含 otaBleBegin + slStartAdv），loop 任务执行后返回
 bool slBleDown();      // BLE 栈当前是否处于挂起状态
