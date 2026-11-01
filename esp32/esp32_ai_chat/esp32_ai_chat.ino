@@ -819,11 +819,32 @@ static void drawBmsBody()
 
   if (!bms::hasData())
   {
-    drawTextAt(12, 130, "正在搜索 BMS 蓝牙设备..", COL_SUB, COL_BG);
-    drawTextAt(12, 158, "请确保电池 BMS 已上电并广播", COL_SUB, COL_BG);
-    drawBtn(3, 190, 314, 40, "重新扫描", COL_ACCENT, 0xFFFF);
-    // 无数据时也必须显示返回按钮，否则进页后出不去
-    drawBtn(3, 440, 314, 40, "返回", COL_KEY_FN, COL_TEXT);
+    // fix14：可见扫描列表——周围所有 BLE 广播都能看到，点选尝试连接
+    int n = bms::scanCount();
+    if (bms::connecting())
+      drawTextAt(12, 118, "正在连接（最多 8 秒），列表暂停更新…", COL_ACCENT, COL_BG);
+    else
+      drawTextAt(12, 118, String("正在扫描周围蓝牙设备，已发现 ") + n + " 台：",
+                 n ? COL_TEXT : COL_SUB, COL_BG);
+    int rowY = 140;
+    int shown = 0;
+    for (int i = 0; i < n && shown < 5; i++)
+    {
+      bms::ScanItem it = bms::scanAt(i);
+      String label = it.name.length() ? it.name : ("未命名 " + String(it.addr.toString().c_str()));
+      if (label.length() > 18) label = label.substring(0, 17) + "..";
+      gfx->fillRoundRect(3, rowY, 314, 38, 6, COL_PANEL);
+      drawTextAt(12, rowY + 11, label, it.hasFF00 ? COL_OK : COL_TEXT, COL_PANEL);
+      String tail = String(it.rssi) + "dBm" + (it.hasFF00 ? " [BMS]" : "");
+      drawTextAt(314 - 12 - tail.length() * 12, rowY + 11, tail, COL_SUB, COL_PANEL);
+      rowY += 44;
+      shown++;
+    }
+    if (!n)
+      drawTextAt(12, rowY + 6, "列表为空：电池需上电/按键唤醒后才广播", COL_SUB, COL_BG);
+    // fix14：扫描+返回双按钮，出页路径不能丢
+    drawBtn(3, 440, 154, 40, "重新扫描", COL_KEY_FN, COL_TEXT);
+    drawBtn(163, 440, 154, 40, "返回", COL_KEY_FN, COL_TEXT);
     return;
   }
 
@@ -1853,8 +1874,24 @@ static void routeTouch(bool press, bool release, bool down, int x, int y)
   case S_BMS:
     if (press) {
       if (ptIn(x, y, 3, 4, 56, 28)) { gotoScreen(S_HOME); return; }
-      if (ptIn(x, y, 3, 440, 314, 40)) { gotoScreen(S_HOME); return; }
-      if (!bms::hasData() && ptIn(x, y, 3, 190, 314, 40)) { bms::begin(); }
+      if (ptIn(x, y, 163, 440, 154, 40)) { gotoScreen(S_HOME); return; }   // 返回（右半）
+      if (ptIn(x, y, 3, 440, 154, 40)) { bms::rescan(); dirtyFull = true; return; }   // 重新扫描（左半）
+      if (!bms::hasData())   // fix14：点列表行 → 连接该设备
+      {
+        int rowY = 140;
+        int n = bms::scanCount();
+        for (int i = 0; i < n && i < 5; i++)
+        {
+          if (ptIn(x, y, 3, rowY, 314, 38))
+          {
+            bms::ScanItem it = bms::scanAt(i);
+            bms::connectAddr(it.addr);
+            dirtyFull = true;
+            return;
+          }
+          rowY += 44;
+        }
+      }
     }
     break;
   case S_SETTINGS: handleSettingsTouch(press, x, y); break;
@@ -2005,6 +2042,13 @@ void loop()
   otaPoll();
   otaHttpPoll();   // 把 WiFi 升级地址同步到蓝牙"信息"特征，网页据此自动填 IP
   bms::poll();
+
+  // BMS 扫描页：列表实时在变，未连接时每 500ms 重绘一次
+  if (scr == S_BMS && !bms::hasData())
+  {
+    static uint32_t lastBmsMs = 0;
+    if (millis() - lastBmsMs > 500) { lastBmsMs = millis(); dirtyFull = true; }
+  }
 
   uint8_t os = (uint8_t)otaState();
   int op = otaPercent();

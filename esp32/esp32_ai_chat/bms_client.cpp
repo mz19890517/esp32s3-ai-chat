@@ -34,7 +34,7 @@ static uint8_t streamBuf[2048];
 static int streamLen = 0;
 
 static void onNotify(BLERemoteCharacteristic *c, uint8_t *data, size_t len, bool isNotify);
-static void connectToServer(NimBLEAdvertisedDevice *dev);
+static void connectToServer(const NimBLEAddress &addr);
 static void buildRequest(uint8_t cmd, uint8_t *out, int *outLen);
 static bool verifyChecksum(uint8_t *frame, int total);
 static void handleFrame(uint8_t *frame, int total);
@@ -56,13 +56,40 @@ class ClientCallbacks : public NimBLEClientCallbacks
   }
 };
 
+// —— fix14：可见扫描列表。很多电动车 BMS 广播里不带 FF00 服务 UUID（只在连接后的
+// GATT 表里才有），旧逻辑 isAdvertisingService(FF00) 一票否决 → "永远扫描中"。
+// 现在收一切广播进列表，用户能点选任意设备尝试连接；FF00 设备仍自动连。——
+static std::vector<ScanItem> scanList;
+static SemaphoreHandle_t listMux = nullptr;   // BLE host 回调与 loop 线程共享列表（内含 String，不能用自旋锁）
+static NimBLEAddress pendingAddr;      // 待连接目标（poll 上下文执行）
+static volatile bool pendingConn = false;
+static volatile bool pendingAuto = false;   // 自动连（FF00）还是用户点选
+static NimBLEAddress connTarget;      // 连接任务的目标地址
+static volatile bool connBusy = false;   // 连接任务运行中（阻塞式 connect 移出 loop，UI 不再冻结 30 秒）
+static void connTask(void *arg);
+
 class ScanCallbacks : public NimBLEAdvertisedDeviceCallbacks
 {
   void onResult(NimBLEAdvertisedDevice *dev) override
   {
-    if (dev->haveServiceUUID() && dev->isAdvertisingService(NimBLEUUID(SVC_UUID)))
+    ScanItem it;
+    it.addr = dev->getAddress();
+    it.rssi = dev->getRSSI();
+    if (dev->haveName()) it.name = String(dev->getName().c_str());
+    it.hasFF00 = dev->haveServiceUUID() && dev->isAdvertisingService(NimBLEUUID(SVC_UUID));
+
+    if (listMux) xSemaphoreTake(listMux, portMAX_DELAY);
+    bool found = false;
+    for (auto &e : scanList)
+      if (e.addr == it.addr) { e.rssi = it.rssi; if (it.name.length()) e.name = it.name; e.hasFF00 |= it.hasFF00; found = true; break; }
+    if (!found && scanList.size() < 16) scanList.push_back(it);
+    if (listMux) xSemaphoreGive(listMux);
+
+    if (it.hasFF00 && !connectedFlag && !pendingConn)
     {
-      connectToServer(dev);
+      pendingAddr = it.addr;
+      pendingAuto = true;
+      pendingConn = true;   // 连接动作在 poll() 主循环执行，不在 BLE 回调里做阻塞操作
     }
   }
 };
@@ -80,8 +107,10 @@ bool begin()
 {
   NimBLEDevice::init("ESP32-BMS");
   NimBLEDevice::setMTU(247);
+  if (!listMux) listMux = xSemaphoreCreateMutex();
   client = NimBLEDevice::createClient();
   client->setClientCallbacks(&clientCb);
+  client->setConnectTimeout(8);   // 默认 30s：点选不可连接设备会把 loop 卡死 30 秒
   return true;
 }
 
@@ -99,16 +128,34 @@ void poll()
     notifyChar = nullptr;
     writeChar = nullptr;
     scanRequested = false;
+    pendingConn = false;
     client = NimBLEDevice::createClient();
     client->setClientCallbacks(&clientCb);
   }
   if (!client) return;
 
+  // fix14b：连接任务运行期间挂起一切扫描/轮询，避免与阻塞式 connect 并发
+  if (connBusy) return;
+
+  // fix14：连接请求（FF00 自动匹配或用户点选）——独立任务执行，loop 不再阻塞 30 秒
+  if (pendingConn && !connectedFlag)
+  {
+    pendingConn = false;
+    connTarget = pendingAddr;
+    if (NimBLEDevice::getScan()->isScanning()) NimBLEDevice::getScan()->stop();
+    connBusy = true;
+    if (xTaskCreate(connTask, "bmsconn", 6144, nullptr, 3, nullptr) != pdPASS)
+      connBusy = false;   // 任务创建失败则放弃本次连接，下一轮恢复扫描
+    return;
+  }
+
   if (!connectedFlag)
   {
     if (NimBLEDevice::getScan()->isScanning()) return;
-    NimBLEDevice::getScan()->setAdvertisedDeviceCallbacks(&scanCb);
-    NimBLEDevice::getScan()->start(SCAN_DURATION_MS, onScanComplete, false);
+    NimBLEScan *scan = NimBLEDevice::getScan();
+    scan->setAdvertisedDeviceCallbacks(&scanCb);
+    scan->setActiveScan(true);   // 取 scan response 里的完整设备名
+    scan->start(SCAN_DURATION_MS, onScanComplete, false);
     return;
   }
 
@@ -146,14 +193,11 @@ static void buildRequest(uint8_t cmd, uint8_t *out, int *outLen)
   *outLen = 7;
 }
 
-static void connectToServer(NimBLEAdvertisedDevice *dev)
+static void connectToServer(const NimBLEAddress &addr)
 {
-  NimBLEDevice::getScan()->stop();
-  if (!client->connect(dev))
-  {
-    NimBLEDevice::getScan()->start(SCAN_DURATION_MS, onScanComplete, false);
-    return;
-  }
+  if (!client->connect(addr))
+    return;   // 失败后 poll 下一轮自动恢复扫描
+
   BLERemoteService *svc = client->getService(SVC_UUID);
   if (!svc)
   {
@@ -168,6 +212,14 @@ static void connectToServer(NimBLEAdvertisedDevice *dev)
     return;
   }
   notifyChar->subscribe(true, onNotify);
+}
+
+// 连接在独立任务里做阻塞式 connect/GATT 发现，loop 只负责 UI 与扫描调度
+static void connTask(void *arg)
+{
+  connectToServer(connTarget);
+  connBusy = false;
+  vTaskDelete(nullptr);
 }
 
 static void onNotify(BLERemoteCharacteristic *c, uint8_t *data, size_t len, bool isNotify)
@@ -249,6 +301,49 @@ static void parseBaseInfo(uint8_t *c, int len)
 
 bool connected() { return connectedFlag; }
 bool hasData() { return hasDataFlag; }
+bool connecting() { return connBusy; }
 BaseInfo info() { return lastInfo; }
+
+int scanCount()
+{
+  if (!listMux) return 0;
+  xSemaphoreTake(listMux, portMAX_DELAY);
+  int n = (int)scanList.size();
+  xSemaphoreGive(listMux);
+  return n;
+}
+
+ScanItem scanAt(int i)
+{
+  ScanItem it;
+  if (listMux) xSemaphoreTake(listMux, portMAX_DELAY);
+  if (i >= 0 && i < (int)scanList.size()) it = scanList[i];
+  if (listMux) xSemaphoreGive(listMux);
+  return it;
+}
+
+void rescan()
+{
+  if (!listMux) return;
+  xSemaphoreTake(listMux, portMAX_DELAY);
+  scanList.clear();
+  xSemaphoreGive(listMux);
+  if (!slBleDown() && !connectedFlag && !connBusy && !NimBLEDevice::getScan()->isScanning())
+  {
+    NimBLEScan *scan = NimBLEDevice::getScan();
+    scan->setAdvertisedDeviceCallbacks(&scanCb);
+    scan->setActiveScan(true);
+    scan->start(SCAN_DURATION_MS, onScanComplete, false);
+  }
+}
+
+bool connectAddr(const NimBLEAddress &a)
+{
+  if (connectedFlag || pendingConn || connBusy || slBleDown()) return false;
+  pendingAddr = a;
+  pendingAuto = false;
+  pendingConn = true;
+  return true;
+}
 
 }
